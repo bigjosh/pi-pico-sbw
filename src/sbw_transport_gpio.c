@@ -1,5 +1,6 @@
 #include "sbw_transport.h"
 
+#include "hardware/sync.h"
 #include "hardware/timer.h"
 #include "pico/stdlib.h"
 
@@ -21,12 +22,27 @@ enum {
 
 static bool g_tclk_high = true;
 
+static uint32_t sbw_transport_low_phase_begin(void) {
+    const uint32_t irq_state = save_and_disable_interrupts();
+    sbw_hw_clock_drive(false);
+    return irq_state;
+}
+
+static void sbw_transport_low_phase_end(uint32_t irq_state) {
+    sbw_hw_clock_drive(true);
+    restore_interrupts(irq_state);
+}
+
+static void sbw_transport_short_clock_pulse_low(uint32_t low_us) {
+    const uint32_t irq_state = sbw_transport_low_phase_begin();
+    busy_wait_us_32(low_us);
+    sbw_transport_low_phase_end(irq_state);
+}
+
 static void sbw_transport_slot_drive(bool level, const sbw_timing_t *timing) {
     sbw_hw_data_drive(level);
     busy_wait_us_32(timing->clock_high_us);
-    sbw_hw_clock_drive(false);
-    busy_wait_us_32(timing->clock_low_us);
-    sbw_hw_clock_drive(true);
+    sbw_transport_short_clock_pulse_low(timing->clock_low_us);
 }
 
 static void sbw_transport_slot_tmsldh(const sbw_timing_t *timing) {
@@ -40,21 +56,21 @@ static void sbw_transport_slot_tmsldh(const sbw_timing_t *timing) {
 
     sbw_hw_data_drive(false);
     busy_wait_us_32(timing->clock_high_us);
-    sbw_hw_clock_drive(false);
+    const uint32_t irq_state = sbw_transport_low_phase_begin();
     busy_wait_us_32(low_before_drive_us);
     sbw_hw_data_drive(true);
     busy_wait_us_32(timing->clock_low_us - low_before_drive_us);
-    sbw_hw_clock_drive(true);
+    sbw_transport_low_phase_end(irq_state);
 }
 
 static bool sbw_transport_slot_tdo(bool sample, const sbw_timing_t *timing) {
     sbw_hw_data_release();
     busy_wait_us_32(timing->clock_high_us);
-    sbw_hw_clock_drive(false);
+    const uint32_t irq_state = sbw_transport_low_phase_begin();
 
     if (!sample) {
         busy_wait_us_32(timing->clock_low_us);
-        sbw_hw_clock_drive(true);
+        sbw_transport_low_phase_end(irq_state);
         return false;
     }
 
@@ -65,7 +81,7 @@ static bool sbw_transport_slot_tdo(bool sample, const sbw_timing_t *timing) {
         busy_wait_us_32(timing->clock_low_us - timing->sample_delay_us);
     }
 
-    sbw_hw_clock_drive(true);
+    sbw_transport_low_phase_end(irq_state);
     return tdo;
 }
 
@@ -82,10 +98,7 @@ static void sbw_transport_entry_rst_high(void) {
     sbw_hw_data_drive(true);
     busy_wait_us_32(SBW_ENTRY_RST_HIGH_SETUP_US);
 
-    sbw_hw_clock_drive(false);
-    busy_wait_us_32(SBW_ENTRY_PULSE_LOW_US);
-
-    sbw_hw_clock_drive(true);
+    sbw_transport_short_clock_pulse_low(SBW_ENTRY_PULSE_LOW_US);
     busy_wait_us_32(SBW_ENTRY_RST_HIGH_SETUP_US);
 
     sleep_ms(SBW_ENTRY_POST_ENABLE_MS);
@@ -104,10 +117,7 @@ static void sbw_transport_entry_rst_low(void) {
     sbw_hw_data_drive(true);
     busy_wait_us_32(SBW_ENTRY_RST_LOW_SETUP_US);
 
-    sbw_hw_clock_drive(false);
-    busy_wait_us_32(SBW_ENTRY_PULSE_LOW_US);
-
-    sbw_hw_clock_drive(true);
+    sbw_transport_short_clock_pulse_low(SBW_ENTRY_PULSE_LOW_US);
     busy_wait_us_32(SBW_ENTRY_RST_LOW_SETUP_US);
 
     sleep_ms(SBW_ENTRY_POST_ENABLE_MS);
@@ -191,7 +201,8 @@ void sbw_transport_clock_test(uint32_t cycles, uint32_t low_us, uint32_t high_us
     sbw_transport_release();
 
     for (uint32_t i = 0; i < cycles; ++i) {
-        sbw_hw_clock_pulse_us(low_us, high_us);
+        sbw_transport_short_clock_pulse_low(low_us);
+        busy_wait_us_32(high_us);
     }
 }
 
