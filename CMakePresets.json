@@ -1,0 +1,29 @@
+{
+  "version": 4,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "pico-clean",
+      "displayName": "Pico Clean Toolchain",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-clean",
+      "cacheVariables": {
+        "CMAKE_MAKE_PROGRAM": "C:/Program Files/Microsoft Visual Studio/2022/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe",
+        "PICO_SDK_PATH": "$env{PICO_SDK_PATH}",
+        "PICO_TOOLCHAIN_PATH": "$env{PICO_TOOLCHAIN_PATH}",
+        "pioasm_DIR": "$env{PIOASM_DIR}",
+        "picotool_DIR": "$env{PICOTOOL_DIR}"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "pico-clean",
+      "configurePreset": "pico-clean"
+    }
+  ]
+}

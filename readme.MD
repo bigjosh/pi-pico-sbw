@@ -27,7 +27,7 @@ The current `SBW` and target-side behavior is based on TI primary documentation,
 
 These documents are in the `docs` folder.
 
-We will avoid using TI source code as a reference since it has proven buggy and low quality. Instead we will work from the primary sources above whenever possible and build up our own approaches to each step of this challenge. 
+We will avoid using TI source code as a reference since it has proven buggy and low quality. Instead we will work from the primary sources above whenever possible and build up our own approaches to each step of this challenge.
 
 ## Hardware Setup
 
@@ -35,7 +35,7 @@ Target:
 
 - `MSP430FR4133`
 - `SBW`
-- externally powered target
+- externally powered target or temporary `GP4`-powered bring-up
 
 Raspberry Pi tested during development:
 
@@ -45,19 +45,28 @@ Raspberry Pi tested during development:
 
 That maps to the physical header as:
 
-Pi Data pin TBD  -> target `/RST/NMI/SBWTDIO`
-Pi Clock pin TBD  -> target `TEST/SBWTCK`
-Pi Ground pin TBD ->  target `GND`
+- `GP3` -> target `/RST/NMI/SBWTDIO`
+- `GP2` -> target `TEST/SBWTCK`
+- Pico `GND` -> target `GND`
+- `GP4` -> target `VCC` for lab bring-up power switching
+
+These choices keep `GP2` and `GP3` adjacent for the future `PIO` transport and leave `GP0` and `GP1` free for UART debugging if needed.
 
 ### Power
 
-The target must already have valid `VCC`.
+The target can be powered from `GP4` during bring-up, but that should be treated as a lab-only convenience path.
 
 For this FR4133 work:
 
-- `VCC` switching is not required to reach the needed debug/programming states
+- `VCC` switching is not required to reach the needed debug/programming states, but it is available for controlled bring-up tests
 - only `RST` and `TEST` are actively driven by the Pi
 - ground must be shared between Pi and target
+
+Important constraints for the current bench setup:
+
+- `GP4` is a GPIO used as a temporary target power source, not a robust power rail
+- `SBWTDIO` has no series resistor right now, so firmware must leave it as input except during intentional drive windows
+- target current draw must stay safely within what the Pico GPIO can source for this temporary setup
 
 ## Smoke Test
 
@@ -65,7 +74,7 @@ For this FR4133 work:
 - take the target under `JTAG` control
 - read and verify JTAG ID
 
-## Functionality test 
+## Functionality test
 
 - enter `SBW`
 - take the target under `JTAG` control
@@ -75,3 +84,57 @@ For this FR4133 work:
 - read it back
 - release the target
 
+## Current Firmware Scaffold
+
+The project now includes a minimal Pico SDK scaffold aimed at safe hardware bring-up before any `PIO` work:
+
+- `src/sbw_hw.c` owns the physical pins and keeps `GP3` high-impedance unless explicitly driven
+- `src/sbw_transport_gpio.c` implements a conservative software `io_bit()` shape plus the documented SBW entry and release sequences
+- `src/sbw_jtag.c` layers a minimal JTAG smoke-test path on top of the transport
+- `src/main.c` exposes a small USB serial shell for early tests and analyzer-assisted bring-up
+
+## Current Status
+
+Host setup, build, flash, USB shell, and `GP4`-based target power switching are working.
+
+The current firmware can:
+
+- power the target on and off from the shell
+- generate raw `SBWTCK` clocks for analyzer work
+- generate one software SBW bit cell with explicit data direction handoff
+- attempt SBW entry, TAP reset, JTAG ID read, and BYPASS smoke test
+
+The current JTAG smoke-test commands are implemented but not yet passing on bench hardware, so this repo should still be treated as a bring-up scaffold rather than a validated programmer.
+
+Current shell commands:
+
+- `help`
+- `pins`
+- `status`
+- `power-on`
+- `power-off`
+- `release`
+- `tap-reset`
+- `read-jtagid`
+- `bypass-test`
+- `clock-test [cycles] [low_us] [high_us]`
+- `slot-test <tms> <tdi> [low_us] [high_us] [sample_us]`
+
+## Build Notes
+
+The repository expects the Pico SDK and ARM embedded toolchain to be available in the shell environment.
+
+This machine now has a clean Pico toolchain install rooted at `C:\Users\passp\pico`:
+
+- SDK: `C:\Users\passp\pico\pico-sdk-2.2.0`
+- ARM GNU Toolchain: `C:\Users\passp\pico\bin`
+- `pioasm`: `C:\Users\passp\pico\pico-sdk-tools-2.2.0\pioasm`
+- `picotool`: `C:\Users\passp\pico\picotool-2.2.0-a4\picotool`
+
+To use that install in PowerShell:
+
+- run `. .\tools\pico-env.ps1`
+- configure with `cmake --preset pico-clean`
+- build with `cmake --build --preset pico-clean`
+
+The current verified output path is `build-clean\pi_pico_sbw.uf2`.
