@@ -21,3 +21,5 @@ void sbw_transport_release(void);
 
 void sbw_transport_clock_test(uint32_t cycles, uint32_t low_us, uint32_t high_us);
 bool sbw_transport_io_bit(bool tms, bool tdi, const sbw_timing_t *timing);
+void sbw_transport_tclk_set(bool high, const sbw_timing_t *timing);
+bool sbw_transport_tclk_is_high(void);

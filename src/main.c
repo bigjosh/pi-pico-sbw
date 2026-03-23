@@ -59,6 +59,9 @@ static void print_help(void) {
     printf("  tap-reset\n");
     printf("  read-jtagid\n");
     printf("  bypass-test\n");
+    printf("  sync-por\n");
+    printf("  read-mem16 <addr>\n");
+    printf("  write-read-mem16 <addr> <value>\n");
     printf("  clock-test [cycles] [low_us] [high_us]\n");
     printf("  slot-test <tms:0|1> <tdi:0|1> [low_us] [high_us] [sample_us]\n");
 }
@@ -213,6 +216,61 @@ static void handle_bypass_test(void) {
         ok ? "(expected)" : "(unexpected)");
 }
 
+static void handle_sync_por(void) {
+    uint16_t control_capture = 0;
+
+    if (!ensure_target_powered()) {
+        return;
+    }
+
+    const bool ok = sbw_jtag_sync_and_por(&control_capture);
+    printf("cntrl-sig=0x%04X %s\n",
+        control_capture,
+        ok ? "(full-emulation)" : "(unexpected)");
+}
+
+static void handle_read_mem16(char *arg1) {
+    uint32_t address = 0;
+    uint16_t value = 0;
+
+    if (!parse_u32(arg1, &address)) {
+        printf("usage: read-mem16 <addr>\n");
+        return;
+    }
+
+    if (!ensure_target_powered()) {
+        return;
+    }
+
+    const bool ok = sbw_jtag_read_mem16(address, &value);
+    printf("mem[0x%05lX]=0x%04X %s\n",
+        (unsigned long)(address & 0x000FFFFFul),
+        value,
+        ok ? "(read)" : "(unexpected)");
+}
+
+static void handle_write_read_mem16(char *arg1, char *arg2) {
+    uint32_t address = 0;
+    uint32_t value32 = 0;
+    uint16_t readback = 0;
+
+    if (!parse_u32(arg1, &address) || !parse_u32(arg2, &value32) || value32 > 0xFFFFu) {
+        printf("usage: write-read-mem16 <addr> <value>\n");
+        return;
+    }
+
+    if (!ensure_target_powered()) {
+        return;
+    }
+
+    const bool ok = sbw_jtag_write_mem16(address, (uint16_t)value32, &readback);
+    printf("mem[0x%05lX]<=0x%04lX readback=0x%04X %s\n",
+        (unsigned long)(address & 0x000FFFFFul),
+        (unsigned long)value32,
+        readback,
+        ok ? "(verified)" : "(unexpected)");
+}
+
 static void handle_command(char *line) {
     char *argv[6] = {0};
     size_t argc = 0;
@@ -273,6 +331,21 @@ static void handle_command(char *line) {
 
     if (strcmp(argv[0], "bypass-test") == 0) {
         handle_bypass_test();
+        return;
+    }
+
+    if (strcmp(argv[0], "sync-por") == 0) {
+        handle_sync_por();
+        return;
+    }
+
+    if (strcmp(argv[0], "read-mem16") == 0) {
+        handle_read_mem16(argv[1]);
+        return;
+    }
+
+    if (strcmp(argv[0], "write-read-mem16") == 0) {
+        handle_write_read_mem16(argv[1], argv[2]);
         return;
     }
 

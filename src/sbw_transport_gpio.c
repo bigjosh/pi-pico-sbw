@@ -19,6 +19,56 @@ enum {
     SBW_ENTRY_POST_ENABLE_MS = 5,
 };
 
+static bool g_tclk_high = true;
+
+static void sbw_transport_slot_drive(bool level, const sbw_timing_t *timing) {
+    sbw_hw_data_drive(level);
+    busy_wait_us_32(timing->clock_high_us);
+    sbw_hw_clock_drive(false);
+    busy_wait_us_32(timing->clock_low_us);
+    sbw_hw_clock_drive(true);
+}
+
+static void sbw_transport_slot_tmsldh(const sbw_timing_t *timing) {
+    uint32_t low_before_drive_us = timing->clock_low_us / 2;
+    if (low_before_drive_us == 0) {
+        low_before_drive_us = 1;
+    }
+    if (low_before_drive_us >= timing->clock_low_us) {
+        low_before_drive_us = timing->clock_low_us - 1;
+    }
+
+    sbw_hw_data_drive(false);
+    busy_wait_us_32(timing->clock_high_us);
+    sbw_hw_clock_drive(false);
+    busy_wait_us_32(low_before_drive_us);
+    sbw_hw_data_drive(true);
+    busy_wait_us_32(timing->clock_low_us - low_before_drive_us);
+    sbw_hw_clock_drive(true);
+}
+
+static bool sbw_transport_slot_tdo(bool sample, const sbw_timing_t *timing) {
+    sbw_hw_data_release();
+    busy_wait_us_32(timing->clock_high_us);
+    sbw_hw_clock_drive(false);
+
+    if (!sample) {
+        busy_wait_us_32(timing->clock_low_us);
+        sbw_hw_clock_drive(true);
+        return false;
+    }
+
+    busy_wait_us_32(timing->sample_delay_us);
+    const bool tdo = sbw_hw_data_read();
+
+    if (timing->clock_low_us > timing->sample_delay_us) {
+        busy_wait_us_32(timing->clock_low_us - timing->sample_delay_us);
+    }
+
+    sbw_hw_clock_drive(true);
+    return tdo;
+}
+
 static void sbw_transport_entry_rst_high(void) {
     // Match TI's FR4xx/FR2xx SBW entry sequence: reset TEST logic low, raise
     // RST/SBWTDIO, activate TEST, then issue the low-high TEST pulse.
@@ -98,6 +148,7 @@ static sbw_timing_t sbw_normalize_timing(const sbw_timing_t *timing) {
 }
 
 void sbw_transport_init(void) {
+    g_tclk_high = true;
     sbw_transport_release();
 }
 
@@ -109,13 +160,16 @@ void sbw_transport_start_mode(sbw_entry_mode_t mode) {
     sbw_transport_release();
     if (mode == SBW_ENTRY_RST_LOW) {
         sbw_transport_entry_rst_low();
+        g_tclk_high = true;
         return;
     }
 
     sbw_transport_entry_rst_high();
+    g_tclk_high = true;
 }
 
 void sbw_transport_release(void) {
+    g_tclk_high = true;
     sbw_hw_data_release();
     sbw_hw_clock_drive(false);
     busy_wait_us_32(SBW_EXIT_HOLD_US);
@@ -145,30 +199,25 @@ bool sbw_transport_io_bit(bool tms, bool tdi, const sbw_timing_t *timing) {
     const sbw_timing_t active = sbw_normalize_timing(timing);
 
     // Each logical JTAG bit is encoded as TMS, TDI, then a released TDO slot.
-    sbw_hw_data_drive(tms);
-    busy_wait_us_32(active.clock_high_us);
-    sbw_hw_clock_drive(false);
-    busy_wait_us_32(active.clock_low_us);
-    sbw_hw_clock_drive(true);
+    sbw_transport_slot_drive(tms, &active);
+    sbw_transport_slot_drive(tdi, &active);
+    return sbw_transport_slot_tdo(true, &active);
+}
 
-    sbw_hw_data_drive(tdi);
-    busy_wait_us_32(active.clock_high_us);
-    sbw_hw_clock_drive(false);
-    busy_wait_us_32(active.clock_low_us);
-    sbw_hw_clock_drive(true);
+void sbw_transport_tclk_set(bool high, const sbw_timing_t *timing) {
+    const sbw_timing_t active = sbw_normalize_timing(timing);
 
-    sbw_hw_data_release();
-    busy_wait_us_32(active.clock_high_us);
-
-    sbw_hw_clock_drive(false);
-    busy_wait_us_32(active.sample_delay_us);
-    const bool tdo = sbw_hw_data_read();
-
-    if (active.clock_low_us > active.sample_delay_us) {
-        busy_wait_us_32(active.clock_low_us - active.sample_delay_us);
+    if (g_tclk_high) {
+        sbw_transport_slot_tmsldh(&active);
+    } else {
+        sbw_transport_slot_drive(false, &active);
     }
 
-    sbw_hw_clock_drive(true);
+    sbw_transport_slot_drive(high, &active);
+    (void)sbw_transport_slot_tdo(false, &active);
+    g_tclk_high = high;
+}
 
-    return tdo;
+bool sbw_transport_tclk_is_high(void) {
+    return g_tclk_high;
 }

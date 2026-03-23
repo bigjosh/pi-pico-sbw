@@ -11,4 +11,7 @@ enum {
 
 bool sbw_jtag_read_id(uint8_t *id);
 bool sbw_jtag_bypass_test(uint16_t *captured);
+bool sbw_jtag_sync_and_por(uint16_t *control_capture);
+bool sbw_jtag_read_mem16(uint32_t address, uint16_t *data);
+bool sbw_jtag_write_mem16(uint32_t address, uint16_t value, uint16_t *readback);
 void sbw_jtag_tap_reset(void);
