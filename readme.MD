@@ -102,9 +102,15 @@ The current firmware can:
 - power the target on and off from the shell
 - generate raw `SBWTCK` clocks for analyzer work
 - generate one software SBW bit cell with explicit data direction handoff
-- attempt SBW entry, TAP reset, JTAG ID read, and BYPASS smoke test
+- perform SBW entry, TAP reset, JTAG ID read, and BYPASS smoke test on bench hardware
 
-The current JTAG smoke-test commands are implemented but not yet passing on bench hardware, so this repo should still be treated as a bring-up scaffold rather than a validated programmer.
+Current bench verification on the wired `MSP430FR4133`:
+
+- `read-jtagid` returns `0x98`
+- `bypass-test` returns `0x52AD` for the `0xA55A` smoke pattern
+- the smoke test passed repeatedly across multiple target power cycles
+
+This repo is now past raw bring-up and has a validated SBW/JTAG smoke-test baseline. The next major step is implementing the documented `SyncJtag_AssertPor()` path and then moving into minimal FRAM read/write.
 
 Current shell commands:
 

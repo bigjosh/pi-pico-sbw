@@ -1,17 +1,67 @@
 #include "sbw_transport.h"
 
 #include "hardware/timer.h"
+#include "pico/stdlib.h"
 
 #include "sbw_hw.h"
 #include "sbw_pins.h"
 
 enum {
     SBW_EXIT_HOLD_US = 200,
-    SBW_ENTRY_SETUP_US = 5,
-    SBW_ENTRY_ENABLE_US = 120,
-    SBW_ENTRY_LOW_US = 5,
-    SBW_ENTRY_HIGH_US = 5,
+    SBW_ENTRY_RST_HIGH_TEST_RESET_MS = 4,
+    SBW_ENTRY_RST_HIGH_TEST_ENABLE_MS = 20,
+    SBW_ENTRY_RST_HIGH_SETUP_US = 60,
+    SBW_ENTRY_RST_LOW_TEST_RESET_MS = 1,
+    SBW_ENTRY_RST_LOW_HOLD_RESET_MS = 50,
+    SBW_ENTRY_RST_LOW_TEST_ENABLE_MS = 100,
+    SBW_ENTRY_RST_LOW_SETUP_US = 40,
+    SBW_ENTRY_PULSE_LOW_US = 1,
+    SBW_ENTRY_POST_ENABLE_MS = 5,
 };
+
+static void sbw_transport_entry_rst_high(void) {
+    // Match TI's FR4xx/FR2xx SBW entry sequence: reset TEST logic low, raise
+    // RST/SBWTDIO, activate TEST, then issue the low-high TEST pulse.
+    sbw_hw_clock_drive(false);
+    sleep_ms(SBW_ENTRY_RST_HIGH_TEST_RESET_MS);
+
+    sbw_hw_data_drive(true);
+    sbw_hw_clock_drive(true);
+    sleep_ms(SBW_ENTRY_RST_HIGH_TEST_ENABLE_MS);
+
+    sbw_hw_data_drive(true);
+    busy_wait_us_32(SBW_ENTRY_RST_HIGH_SETUP_US);
+
+    sbw_hw_clock_drive(false);
+    busy_wait_us_32(SBW_ENTRY_PULSE_LOW_US);
+
+    sbw_hw_clock_drive(true);
+    busy_wait_us_32(SBW_ENTRY_RST_HIGH_SETUP_US);
+
+    sleep_ms(SBW_ENTRY_POST_ENABLE_MS);
+}
+
+static void sbw_transport_entry_rst_low(void) {
+    sbw_hw_clock_drive(false);
+    sleep_ms(SBW_ENTRY_RST_LOW_TEST_RESET_MS);
+
+    sbw_hw_data_drive(false);
+    sleep_ms(SBW_ENTRY_RST_LOW_HOLD_RESET_MS);
+
+    sbw_hw_clock_drive(true);
+    sleep_ms(SBW_ENTRY_RST_LOW_TEST_ENABLE_MS);
+
+    sbw_hw_data_drive(true);
+    busy_wait_us_32(SBW_ENTRY_RST_LOW_SETUP_US);
+
+    sbw_hw_clock_drive(false);
+    busy_wait_us_32(SBW_ENTRY_PULSE_LOW_US);
+
+    sbw_hw_clock_drive(true);
+    busy_wait_us_32(SBW_ENTRY_RST_LOW_SETUP_US);
+
+    sleep_ms(SBW_ENTRY_POST_ENABLE_MS);
+}
 
 static sbw_timing_t sbw_normalize_timing(const sbw_timing_t *timing) {
     sbw_timing_t normalized = {
@@ -57,24 +107,12 @@ void sbw_transport_start(void) {
 
 void sbw_transport_start_mode(sbw_entry_mode_t mode) {
     sbw_transport_release();
-
-    // Enter SBW using the timing window from the FR4133 datasheet and the
-    // entry waveforms from SLAU320 Figure 2-13.
-    sbw_hw_data_drive(mode == SBW_ENTRY_RST_HIGH);
-    busy_wait_us_32(SBW_ENTRY_SETUP_US);
-
-    sbw_hw_clock_drive(true);
-    busy_wait_us_32(SBW_ENTRY_ENABLE_US);
-
-    sbw_hw_clock_drive(false);
     if (mode == SBW_ENTRY_RST_LOW) {
-        sbw_hw_data_drive(true);
+        sbw_transport_entry_rst_low();
+        return;
     }
 
-    busy_wait_us_32(SBW_ENTRY_LOW_US);
-
-    sbw_hw_clock_drive(true);
-    busy_wait_us_32(SBW_ENTRY_HIGH_US);
+    sbw_transport_entry_rst_high();
 }
 
 void sbw_transport_release(void) {
