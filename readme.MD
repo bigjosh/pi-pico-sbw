@@ -50,7 +50,7 @@ That maps to the physical header as:
 - Pico `GND` -> target `GND`
 - `GP4` -> target `VCC` for lab bring-up power switching
 
-These choices keep `GP2` and `GP3` adjacent for the future `PIO` transport and leave `GP0` and `GP1` free for UART debugging if needed.
+These choices keep the two SBW pins adjacent and leave `GP0` and `GP1` free for UART debugging if needed.
 
 ### Power
 
@@ -186,3 +186,16 @@ To use that install in PowerShell:
 - build with `cmake --build --preset pico-clean`
 
 The current verified output path is `build-clean\pi_pico_sbw.uf2`.
+
+## MicroPython Native Module Path
+
+There is now a parallel MicroPython-oriented path in `mpy/`.
+
+- `mpy/native/sbw_native.c` is a native `.mpy` module that keeps the hot SBW/JTAG path in C with direct MMIO GPIO writes and fixed `125 MHz` cycle-counted delays
+- `mpy/sbw.py` is a thin Python wrapper that configures the SIO pins, checks that `machine.freq()` is exactly `125 MHz`, and calls coarse native operations like `read_id`, `write_mem16`, `read_block16`, and `write_block16`
+- `mpy/main.py` provides a small MicroPython shell with the same high-level bench flow as the Pico SDK shell
+- `mpy/testsuite.py` provides the parity regression sequence for the MicroPython path
+
+This path deliberately avoids `PIO` and keeps Python out of the timing-critical JTAG inner loops.
+
+One practical note from live bench testing on official MicroPython `v1.27.0` for `RPI_PICO2_W`: the board booted at `150 MHz`, not `125 MHz`. The Python wrapper intentionally checks for `125 MHz` and raises if the clock is different, so a real fixture image should set `machine.freq(125000000)` in `boot.py` before importing the SBW wrapper.

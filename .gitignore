@@ -7,3 +7,7 @@ tmp/
 *.hex
 *.elf
 *.map
+mpy/__pycache__/
+mpy/native/build/
+mpy/native/*.mpy
+mpy/native/.mpy_ld_cache
