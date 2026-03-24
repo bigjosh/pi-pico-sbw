@@ -16,7 +16,9 @@ enum {
     SBW_IR_DATA_16BIT = 0x41,
     SBW_IR_DATA_CAPTURE = 0x42,
     SBW_IR_ADDR_16BIT = 0x83,
+    SBW_IR_ADDR_CAPTURE = 0x84,
     SBW_IR_DATA_TO_ADDR = 0x85,
+    SBW_IR_DATA_QUICK = 0x43,
     SBW_IR_BYPASS = 0xFF,
     SBW_SAFE_FRAM_PC = 0x0004,
     SBW_SYSCFG0_ADDR_FR4XX = 0x0160,
@@ -29,6 +31,8 @@ enum {
     SBW_INFO_FRAM_END_FR4133 = 0x19FF,
     SBW_MAIN_FRAM_START_FR4133 = 0xC400,
     SBW_MAIN_FRAM_END_FR4133 = 0xFFFF,
+    SBW_MAIN_FRAM_BENCH_END_FR4133 = 0xFF7E,
+    SBW_NOP = 0x4303,
 };
 
 static bool sbw_jtag_io_bit(bool tms, bool tdi) {
@@ -195,11 +199,7 @@ static bool sbw_jtag_execute_por(uint16_t *control_capture) {
     return (status & SBW_JTAG_FULL_EMULATION_MASK) == SBW_JTAG_FULL_EMULATION_MASK;
 }
 
-static bool sbw_jtag_write_mem16_internal(uint32_t address, uint16_t data) {
-    if (!sbw_jtag_in_full_emulation(NULL)) {
-        return false;
-    }
-
+static void sbw_jtag_write_mem16_sequence(uint32_t address, uint16_t data) {
     sbw_jtag_tclk_set(false);
     (void)sbw_jtag_shift_ir8(SBW_IR_CNTRL_SIG_16BIT);
     (void)sbw_jtag_shift_dr16(0x0500);
@@ -216,8 +216,141 @@ static bool sbw_jtag_write_mem16_internal(uint32_t address, uint16_t data) {
     sbw_jtag_tclk_set(true);
     sbw_jtag_tclk_set(false);
     sbw_jtag_tclk_set(true);
+}
+
+static bool sbw_jtag_write_mem16_internal(uint32_t address, uint16_t data) {
+    if (!sbw_jtag_in_full_emulation(NULL)) {
+        return false;
+    }
+
+    sbw_jtag_write_mem16_sequence(address, data);
+    return sbw_jtag_in_full_emulation(NULL);
+}
+
+static bool sbw_jtag_set_pc_430xv2(uint32_t address) {
+    const uint32_t pc = address & 0x000FFFFFu;
+    const uint16_t mova_imm20_pc = (uint16_t)((((pc >> 16) & 0xFu) << 8) | 0x0080u);
+
+    if (!sbw_jtag_in_full_emulation(NULL)) {
+        return false;
+    }
+
+    // Follow TI's SetPC_430Xv2 flow from SLAU320.
+    sbw_jtag_tclk_set(false);
+    (void)sbw_jtag_shift_ir8(SBW_IR_DATA_16BIT);
+    sbw_jtag_tclk_set(true);
+    (void)sbw_jtag_shift_dr16(mova_imm20_pc);
+
+    sbw_jtag_tclk_set(false);
+    (void)sbw_jtag_shift_ir8(SBW_IR_CNTRL_SIG_16BIT);
+    (void)sbw_jtag_shift_dr16(0x1400);
+
+    (void)sbw_jtag_shift_ir8(SBW_IR_DATA_16BIT);
+    sbw_jtag_tclk_set(false);
+    sbw_jtag_tclk_set(true);
+    (void)sbw_jtag_shift_dr16((uint16_t)pc);
+
+    sbw_jtag_tclk_set(false);
+    sbw_jtag_tclk_set(true);
+    (void)sbw_jtag_shift_dr16(SBW_NOP);
+
+    sbw_jtag_tclk_set(false);
+    (void)sbw_jtag_shift_ir8(SBW_IR_ADDR_CAPTURE);
+    (void)sbw_jtag_shift_dr20(0x00000);
+    return true;
+}
+
+static uint16_t sbw_jtag_pattern_word(size_t index) {
+    return (uint16_t)(0xA55Au ^ ((uint16_t)index * 0x1357u) ^ (uint16_t)(index >> 4));
+}
+
+static bool sbw_jtag_fram_range_allowed(uint32_t address, size_t word_count) {
+    const uint32_t start = address & 0x000FFFFFu;
+
+    if (word_count == 0 || (start & 0x1u) != 0) {
+        return false;
+    }
+
+    const uint64_t last64 = (uint64_t)start + ((uint64_t)word_count * 2u) - 2u;
+    if (last64 > 0x000FFFFFu) {
+        return false;
+    }
+
+    const uint32_t last = (uint32_t)last64;
+    if (start >= SBW_INFO_FRAM_START_FR4133 && last <= SBW_INFO_FRAM_END_FR4133) {
+        return true;
+    }
+
+    // Stay below the JTAG/BSL signature region at 0xFF80 and above.
+    return start >= SBW_MAIN_FRAM_START_FR4133 && last <= SBW_MAIN_FRAM_BENCH_END_FR4133;
+}
+
+static bool sbw_jtag_write_block16_pattern_internal(uint32_t address, size_t word_count) {
+    if (!sbw_jtag_in_full_emulation(NULL)) {
+        return false;
+    }
+
+    for (size_t index = 0; index < word_count; ++index) {
+        sbw_jtag_write_mem16_sequence(address + (uint32_t)(index * 2u), sbw_jtag_pattern_word(index));
+    }
 
     return sbw_jtag_in_full_emulation(NULL);
+}
+
+static bool sbw_jtag_read_block16_quick_internal(uint32_t address, uint16_t *data, size_t word_count) {
+    if (word_count == 0 || !data || !sbw_jtag_set_pc_430xv2(address)) {
+        return false;
+    }
+
+    sbw_jtag_tclk_set(true);
+    (void)sbw_jtag_shift_ir8(SBW_IR_CNTRL_SIG_16BIT);
+    (void)sbw_jtag_shift_dr16(0x0501);
+    (void)sbw_jtag_shift_ir8(SBW_IR_ADDR_CAPTURE);
+    (void)sbw_jtag_shift_ir8(SBW_IR_DATA_QUICK);
+    sbw_jtag_tclk_set(true);
+
+    for (size_t index = 0; index < word_count; ++index) {
+        sbw_jtag_tclk_set(false);
+        data[index] = sbw_jtag_shift_dr16(0x0000);
+        sbw_jtag_tclk_set(true);
+    }
+
+    return true;
+}
+
+static bool sbw_jtag_verify_block16_quick_pattern_internal(uint32_t address,
+    size_t word_count,
+    sbw_jtag_fram_bench_result_t *result) {
+    uint16_t actual = 0;
+
+    if (word_count == 0 || !sbw_jtag_set_pc_430xv2(address)) {
+        return false;
+    }
+
+    sbw_jtag_tclk_set(true);
+    (void)sbw_jtag_shift_ir8(SBW_IR_CNTRL_SIG_16BIT);
+    (void)sbw_jtag_shift_dr16(0x0501);
+    (void)sbw_jtag_shift_ir8(SBW_IR_ADDR_CAPTURE);
+    (void)sbw_jtag_shift_ir8(SBW_IR_DATA_QUICK);
+    sbw_jtag_tclk_set(true);
+
+    for (size_t index = 0; index < word_count; ++index) {
+        sbw_jtag_tclk_set(false);
+        actual = sbw_jtag_shift_dr16(0x0000);
+        sbw_jtag_tclk_set(true);
+
+        const uint16_t expected = sbw_jtag_pattern_word(index);
+        if (actual != expected) {
+            if (result) {
+                result->mismatch_index = (uint32_t)index;
+                result->mismatch_expected = expected;
+                result->mismatch_actual = actual;
+            }
+            return false;
+        }
+    }
+
+    return true;
 }
 
 static uint16_t sbw_jtag_fram_protection_mask(uint32_t address) {
@@ -470,6 +603,21 @@ bool sbw_jtag_write_mem16(uint32_t address, uint16_t value, uint16_t *readback) 
     return false;
 }
 
+bool sbw_jtag_read_mem16_quick(uint32_t address, uint16_t *data, size_t word_count) {
+    for (uint32_t attempt = 0; attempt < SBW_JTAG_ATTEMPTS; ++attempt) {
+        sbw_jtag_begin_session();
+        const bool ok = sbw_jtag_prepare_cpu(NULL) &&
+            sbw_jtag_read_block16_quick_internal(address, data, word_count);
+        sbw_transport_release();
+
+        if (ok) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 bool sbw_jtag_fram_smoke16(uint32_t address, uint16_t value, sbw_jtag_fram_smoke_result_t *result) {
     sbw_jtag_fram_smoke_result_t last = {0};
 
@@ -495,6 +643,59 @@ bool sbw_jtag_fram_smoke16(uint32_t address, uint16_t value, sbw_jtag_fram_smoke
         sbw_transport_release();
 
         if (ok) {
+            if (result) {
+                *result = last;
+            }
+            return true;
+        }
+    }
+
+    if (result) {
+        *result = last;
+    }
+
+    return false;
+}
+
+bool sbw_jtag_fram_bench(uint32_t address, size_t word_count, sbw_jtag_fram_bench_result_t *result) {
+    sbw_jtag_fram_bench_result_t last = {
+        .word_count = (uint32_t)word_count,
+        .write_us = 0,
+        .verify_us = 0,
+        .mismatch_index = (uint32_t)word_count,
+        .mismatch_expected = 0,
+        .mismatch_actual = 0,
+    };
+
+    if (!sbw_jtag_fram_range_allowed(address, word_count)) {
+        if (result) {
+            *result = last;
+        }
+        return false;
+    }
+
+    for (uint32_t attempt = 0; attempt < SBW_JTAG_ATTEMPTS; ++attempt) {
+        uint32_t start_us = (uint32_t)time_us_64();
+
+        sbw_jtag_begin_session();
+        const bool write_ok = sbw_jtag_prepare_cpu(NULL) &&
+            sbw_jtag_unlock_fram_for_address(address, NULL, NULL) &&
+            sbw_jtag_write_block16_pattern_internal(address, word_count);
+        sbw_transport_release();
+
+        last.write_us = (uint32_t)(time_us_64() - start_us);
+        last.mismatch_index = (uint32_t)word_count;
+        last.mismatch_expected = 0;
+        last.mismatch_actual = 0;
+
+        start_us = (uint32_t)time_us_64();
+        sbw_jtag_begin_session();
+        const bool verify_ok = sbw_jtag_prepare_cpu(NULL) &&
+            sbw_jtag_verify_block16_quick_pattern_internal(address, word_count, &last);
+        sbw_transport_release();
+        last.verify_us = (uint32_t)(time_us_64() - start_us);
+
+        if (write_ok && verify_ok) {
             if (result) {
                 *result = last;
             }

@@ -10,6 +10,10 @@
 #include "sbw_pins.h"
 #include "sbw_transport.h"
 
+enum {
+    QUICK_READ16_MAX_WORDS = 16,
+};
+
 static bool ensure_target_powered(void);
 
 static bool read_line(char *buffer, size_t size) {
@@ -55,8 +59,10 @@ static void print_help(void) {
     printf("  bypass-test\n");
     printf("  sync-por\n");
     printf("  read-mem16 <addr>\n");
+    printf("  quick-read16 <addr> <words>\n");
     printf("  write-read-mem16 <addr> <value>\n");
     printf("  fram-smoke16 <addr> <value>\n");
+    printf("  fram-bench <addr> <words>\n");
     printf("  clock-test [cycles]\n");
     printf("  slot-test <tms:0|1> <tdi:0|1>  (debug waveform probe)\n");
 }
@@ -231,6 +237,35 @@ static void handle_read_mem16(char *arg1) {
         ok ? "(read)" : "(unexpected)");
 }
 
+static void handle_quick_read16(char *arg1, char *arg2) {
+    uint32_t address = 0;
+    uint32_t words = 0;
+    uint16_t values[QUICK_READ16_MAX_WORDS] = {0};
+
+    if (!parse_u32(arg1, &address) || !parse_u32(arg2, &words) || words == 0 || words > QUICK_READ16_MAX_WORDS) {
+        printf("usage: quick-read16 <addr> <words:1-%u>\n", QUICK_READ16_MAX_WORDS);
+        return;
+    }
+
+    if (!ensure_target_powered()) {
+        return;
+    }
+
+    const bool ok = sbw_jtag_read_mem16_quick(address, values, words);
+    printf("quick-read16 addr=0x%05lX words=%lu %s\n",
+        (unsigned long)(address & 0x000FFFFFul),
+        (unsigned long)words,
+        ok ? "(read)" : "(unexpected)");
+
+    if (!ok) {
+        return;
+    }
+
+    for (uint32_t index = 0; index < words; ++index) {
+        printf("  [%lu] = 0x%04X\n", (unsigned long)index, values[index]);
+    }
+}
+
 static void handle_write_read_mem16(char *arg1, char *arg2) {
     uint32_t address = 0;
     uint32_t value32 = 0;
@@ -275,6 +310,45 @@ static void handle_fram_smoke16(char *arg1, char *arg2) {
         result.test_readback,
         result.restored_readback,
         ok ? "(verified-restored)" : "(unexpected)");
+}
+
+static void handle_fram_bench(char *arg1, char *arg2) {
+    uint32_t address = 0;
+    uint32_t words = 0;
+    sbw_jtag_fram_bench_result_t result = {0};
+
+    if (!parse_u32(arg1, &address) || !parse_u32(arg2, &words) || words == 0) {
+        printf("usage: fram-bench <addr> <words>\n");
+        return;
+    }
+
+    if (!ensure_target_powered()) {
+        return;
+    }
+
+    const bool ok = sbw_jtag_fram_bench(address, words, &result);
+    const uint32_t bytes = result.word_count * 2u;
+    const unsigned long long write_kib_s = result.write_us == 0 ? 0ull :
+        ((unsigned long long)bytes * 1000000ull) / ((unsigned long long)result.write_us * 1024ull);
+    const unsigned long long verify_kib_s = result.verify_us == 0 ? 0ull :
+        ((unsigned long long)bytes * 1000000ull) / ((unsigned long long)result.verify_us * 1024ull);
+
+    printf("fram-bench addr=0x%05lX words=%lu bytes=%lu write=%luus (%llu KiB/s) verify=%luus (%llu KiB/s) %s\n",
+        (unsigned long)(address & 0x000FFFFFul),
+        (unsigned long)result.word_count,
+        (unsigned long)bytes,
+        (unsigned long)result.write_us,
+        write_kib_s,
+        (unsigned long)result.verify_us,
+        verify_kib_s,
+        ok ? "(verified)" : "(unexpected)");
+
+    if (!ok && result.mismatch_index < result.word_count) {
+        printf("mismatch index=%lu expected=0x%04X actual=0x%04X\n",
+            (unsigned long)result.mismatch_index,
+            result.mismatch_expected,
+            result.mismatch_actual);
+    }
 }
 
 static void handle_command(char *line) {
@@ -350,6 +424,11 @@ static void handle_command(char *line) {
         return;
     }
 
+    if (strcmp(argv[0], "quick-read16") == 0) {
+        handle_quick_read16(argv[1], argv[2]);
+        return;
+    }
+
     if (strcmp(argv[0], "write-read-mem16") == 0) {
         handle_write_read_mem16(argv[1], argv[2]);
         return;
@@ -357,6 +436,11 @@ static void handle_command(char *line) {
 
     if (strcmp(argv[0], "fram-smoke16") == 0) {
         handle_fram_smoke16(argv[1], argv[2]);
+        return;
+    }
+
+    if (strcmp(argv[0], "fram-bench") == 0) {
+        handle_fram_bench(argv[1], argv[2]);
         return;
     }
 

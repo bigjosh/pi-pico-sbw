@@ -111,6 +111,8 @@ The current firmware can:
 - write and verify 16-bit target RAM words
 - clear and restore FR4xx FRAM protection in the write path when the target address is in FRAM
 - expose a reversible `fram-smoke16` command for the first cautious FRAM proof
+- expose `quick-read16` for small-block quick-read diagnostics
+- expose `fram-bench` for destructive bulk FRAM write/verify timing
 
 Current bench verification on the wired `MSP430FR4133`:
 
@@ -121,6 +123,10 @@ Current bench verification on the wired `MSP430FR4133`:
 - `read-mem16 0xfffc` consistently returns `0xEE44`
 - `write-read-mem16 0x2000 0x1234` verified RAM write/readback
 - `write-read-mem16 0x2002 0xA55A` verified RAM write/readback
+- `fram-smoke16 0xC400 0x1234` verified write/read/restore on live FRAM
+- `fram-smoke16 0xC402 0xA55A` verified write/read/restore on live FRAM
+- `quick-read16 0xC400 4` matched four known FRAM words written with the standard path
+- `fram-bench 0xC400 5120` wrote and verified `10,240` bytes in `1,403,611 us`
 - the smoke test passed repeatedly across multiple target power cycles
 
 Current functional regression sequence:
@@ -135,9 +141,9 @@ Current functional regression sequence:
 - `write-read-mem16 0x2002 0xA55A`
 - `power-off`
 
-This repo is now past raw bring-up and has a validated SBW/JTAG control baseline with working RAM access. The next major step is the first cautious FRAM write/readback at a known-safe address on the target.
+This repo is now past raw bring-up and has a validated SBW/JTAG control baseline with working RAM and FRAM access. The current bulk-write path uses a single SBW/JTAG session with one FRAM unlock, repeated doc-based `WriteMem_430Xv2` word writes, and quick-read verification.
 
-The FRAM protection clear/restore path is now implemented for FR4133, and the shell exposes `fram-smoke16 <addr> <value>` to read the original FRAM word, write a test value, verify it, restore the original word, and verify the restore. Live FRAM validation is still pending a confirmed safe scratch address on the target.
+On the current wired target, `fram-bench 0xC400 5120` verified a `10 KB` FRAM transfer in about `1.4 s`, which is roughly `7 KiB/s` write throughput and `39 KiB/s` quick-read verify throughput.
 
 Current shell commands:
 
@@ -152,8 +158,10 @@ Current shell commands:
 - `bypass-test`
 - `sync-por`
 - `read-mem16 <addr>`
+- `quick-read16 <addr> <words>`
 - `write-read-mem16 <addr> <value>`
 - `fram-smoke16 <addr> <value>`
+- `fram-bench <addr> <words>`
 - `clock-test [cycles]`
 - `slot-test <tms> <tdi>`
 
