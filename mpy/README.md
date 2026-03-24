@@ -44,12 +44,14 @@ On the live `RPI_PICO2_W` test board with official MicroPython `v1.27.0`, the de
 ## Build
 
 1. Install `pyelftools` on the build machine.
-2. Build the natmod:
+2. From the repo root, build the natmod:
 
 ```powershell
 python -m pip install --user pyelftools
 .\tools\build-mpy-native.ps1
 ```
+
+The build output is `mpy/native/sbw_native.mpy`.
 
 Copy these files to the Pico running MicroPython:
 

@@ -77,10 +77,6 @@ def assert_system_clock_125mhz():
     return actual
 
 
-def default_hw():
-    return DEFAULT_HW
-
-
 def cycles_to_us(cycles):
     return int(cycles) // 125
 

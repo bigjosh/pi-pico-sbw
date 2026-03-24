@@ -1,13 +1,6 @@
-build/
-build-*/
-cmake-build-*/
 tmp/
-*.uf2
-*.bin
-*.hex
-*.elf
-*.map
-mpy/__pycache__/
+__pycache__/
+*.pyc
 mpy/native/build/
 mpy/native/*.mpy
 mpy/native/.mpy_ld_cache
