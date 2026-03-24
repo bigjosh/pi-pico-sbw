@@ -56,6 +56,7 @@ static void print_help(void) {
     printf("  sync-por\n");
     printf("  read-mem16 <addr>\n");
     printf("  write-read-mem16 <addr> <value>\n");
+    printf("  fram-smoke16 <addr> <value>\n");
     printf("  clock-test [cycles]\n");
     printf("  slot-test <tms:0|1> <tdi:0|1>  (debug waveform probe)\n");
 }
@@ -252,6 +253,30 @@ static void handle_write_read_mem16(char *arg1, char *arg2) {
         ok ? "(verified)" : "(unexpected)");
 }
 
+static void handle_fram_smoke16(char *arg1, char *arg2) {
+    uint32_t address = 0;
+    uint32_t value32 = 0;
+    sbw_jtag_fram_smoke_result_t result = {0};
+
+    if (!parse_u32(arg1, &address) || !parse_u32(arg2, &value32) || value32 > 0xFFFFu) {
+        printf("usage: fram-smoke16 <addr> <value>\n");
+        return;
+    }
+
+    if (!ensure_target_powered()) {
+        return;
+    }
+
+    const bool ok = sbw_jtag_fram_smoke16(address, (uint16_t)value32, &result);
+    printf("fram[0x%05lX] orig=0x%04X test=0x%04lX readback=0x%04X restore=0x%04X %s\n",
+        (unsigned long)(address & 0x000FFFFFul),
+        result.original,
+        (unsigned long)value32,
+        result.test_readback,
+        result.restored_readback,
+        ok ? "(verified-restored)" : "(unexpected)");
+}
+
 static void handle_command(char *line) {
     char *argv[6] = {0};
     size_t argc = 0;
@@ -327,6 +352,11 @@ static void handle_command(char *line) {
 
     if (strcmp(argv[0], "write-read-mem16") == 0) {
         handle_write_read_mem16(argv[1], argv[2]);
+        return;
+    }
+
+    if (strcmp(argv[0], "fram-smoke16") == 0) {
+        handle_fram_smoke16(argv[1], argv[2]);
         return;
     }
 

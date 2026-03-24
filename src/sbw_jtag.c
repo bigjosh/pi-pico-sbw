@@ -19,8 +19,16 @@ enum {
     SBW_IR_DATA_TO_ADDR = 0x85,
     SBW_IR_BYPASS = 0xFF,
     SBW_SAFE_FRAM_PC = 0x0004,
+    SBW_SYSCFG0_ADDR_FR4XX = 0x0160,
+    SBW_SYSCFG0_FRAM_PASSWORD = 0xA500,
+    SBW_SYSCFG0_PFWP = 0x0001,
+    SBW_SYSCFG0_DFWP = 0x0002,
     SBW_WDTCTL_ADDR_FR4XX = 0x01CC,
     SBW_WDTCTL_HOLD = 0x5A80,
+    SBW_INFO_FRAM_START_FR4133 = 0x1800,
+    SBW_INFO_FRAM_END_FR4133 = 0x19FF,
+    SBW_MAIN_FRAM_START_FR4133 = 0xC400,
+    SBW_MAIN_FRAM_END_FR4133 = 0xFFFF,
 };
 
 static bool sbw_jtag_io_bit(bool tms, bool tdi) {
@@ -116,6 +124,8 @@ static uint16_t sbw_jtag_read_control_signal(void) {
     return sbw_jtag_shift_dr16(0x0000);
 }
 
+static bool sbw_jtag_read_mem16_internal(uint32_t address, uint16_t *data);
+
 static bool sbw_jtag_in_full_emulation(uint16_t *control_capture) {
     const uint16_t status = sbw_jtag_read_control_signal();
 
@@ -208,6 +218,84 @@ static bool sbw_jtag_write_mem16_internal(uint32_t address, uint16_t data) {
     sbw_jtag_tclk_set(true);
 
     return sbw_jtag_in_full_emulation(NULL);
+}
+
+static uint16_t sbw_jtag_fram_protection_mask(uint32_t address) {
+    const uint32_t masked_address = address & 0x000FFFFFu;
+
+    if (masked_address >= SBW_INFO_FRAM_START_FR4133 && masked_address <= SBW_INFO_FRAM_END_FR4133) {
+        return SBW_SYSCFG0_DFWP;
+    }
+
+    if (masked_address >= SBW_MAIN_FRAM_START_FR4133 && masked_address <= SBW_MAIN_FRAM_END_FR4133) {
+        return SBW_SYSCFG0_PFWP;
+    }
+
+    return 0;
+}
+
+static bool sbw_jtag_write_syscfg0_low(uint16_t low_bits) {
+    return sbw_jtag_write_mem16_internal(SBW_SYSCFG0_ADDR_FR4XX,
+        SBW_SYSCFG0_FRAM_PASSWORD | (low_bits & 0x00FFu));
+}
+
+static bool sbw_jtag_unlock_fram_for_address(uint32_t address, uint16_t *saved_low_bits, bool *changed) {
+    const uint16_t protection_mask = sbw_jtag_fram_protection_mask(address);
+    uint16_t syscfg0 = 0;
+
+    if (saved_low_bits) {
+        *saved_low_bits = 0;
+    }
+
+    if (changed) {
+        *changed = false;
+    }
+
+    if (protection_mask == 0) {
+        return true;
+    }
+
+    if (!sbw_jtag_read_mem16_internal(SBW_SYSCFG0_ADDR_FR4XX, &syscfg0)) {
+        return false;
+    }
+
+    const uint16_t saved = syscfg0 & 0x00FFu;
+    if (saved_low_bits) {
+        *saved_low_bits = saved;
+    }
+
+    if ((saved & protection_mask) == 0) {
+        return true;
+    }
+
+    if (!sbw_jtag_write_syscfg0_low(saved & (uint16_t)~protection_mask)) {
+        return false;
+    }
+
+    if (changed) {
+        *changed = true;
+    }
+
+    return true;
+}
+
+static bool sbw_jtag_restore_fram_protection(uint16_t saved_low_bits, bool changed) {
+    if (!changed) {
+        return true;
+    }
+
+    return sbw_jtag_write_syscfg0_low(saved_low_bits);
+}
+
+static bool sbw_jtag_write_target_word(uint32_t address, uint16_t value) {
+    uint16_t saved_fram_cfg = 0;
+    bool fram_cfg_changed = false;
+
+    const bool write_ok = sbw_jtag_unlock_fram_for_address(address, &saved_fram_cfg, &fram_cfg_changed) &&
+        sbw_jtag_write_mem16_internal(address, value);
+
+    const bool restore_ok = sbw_jtag_restore_fram_protection(saved_fram_cfg, fram_cfg_changed);
+    return write_ok && restore_ok;
 }
 
 static bool sbw_jtag_disable_watchdog(void) {
@@ -361,8 +449,10 @@ bool sbw_jtag_write_mem16(uint32_t address, uint16_t value, uint16_t *readback) 
     for (uint32_t attempt = 0; attempt < SBW_JTAG_ATTEMPTS; ++attempt) {
         sbw_jtag_begin_session();
         const bool ok = sbw_jtag_prepare_cpu(NULL) &&
-            sbw_jtag_write_mem16_internal(address, value) &&
-            sbw_jtag_read_mem16_internal(address, &last_readback);
+            sbw_jtag_write_target_word(address, value) &&
+            sbw_jtag_read_mem16_internal(address, &last_readback) &&
+            last_readback == value;
+
         sbw_transport_release();
 
         if (ok) {
@@ -375,6 +465,45 @@ bool sbw_jtag_write_mem16(uint32_t address, uint16_t value, uint16_t *readback) 
 
     if (readback) {
         *readback = last_readback;
+    }
+
+    return false;
+}
+
+bool sbw_jtag_fram_smoke16(uint32_t address, uint16_t value, sbw_jtag_fram_smoke_result_t *result) {
+    sbw_jtag_fram_smoke_result_t last = {0};
+
+    if (sbw_jtag_fram_protection_mask(address) == 0) {
+        if (result) {
+            *result = last;
+        }
+        return false;
+    }
+
+    for (uint32_t attempt = 0; attempt < SBW_JTAG_ATTEMPTS; ++attempt) {
+        sbw_jtag_begin_session();
+
+        bool ok = sbw_jtag_prepare_cpu(NULL) &&
+            sbw_jtag_read_mem16_internal(address, &last.original) &&
+            sbw_jtag_write_target_word(address, value) &&
+            sbw_jtag_read_mem16_internal(address, &last.test_readback) &&
+            last.test_readback == value &&
+            sbw_jtag_write_target_word(address, last.original) &&
+            sbw_jtag_read_mem16_internal(address, &last.restored_readback) &&
+            last.restored_readback == last.original;
+
+        sbw_transport_release();
+
+        if (ok) {
+            if (result) {
+                *result = last;
+            }
+            return true;
+        }
+    }
+
+    if (result) {
+        *result = last;
     }
 
     return false;

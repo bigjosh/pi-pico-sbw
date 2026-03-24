@@ -109,6 +109,8 @@ The current firmware can:
 - execute the FR4xx `SyncJtag_AssertPor()` path and confirm Full-Emulation-State
 - read 16-bit target memory words
 - write and verify 16-bit target RAM words
+- clear and restore FR4xx FRAM protection in the write path when the target address is in FRAM
+- expose a reversible `fram-smoke16` command for the first cautious FRAM proof
 
 Current bench verification on the wired `MSP430FR4133`:
 
@@ -133,7 +135,9 @@ Current functional regression sequence:
 - `write-read-mem16 0x2002 0xA55A`
 - `power-off`
 
-This repo is now past raw bring-up and has a validated SBW/JTAG control baseline with working RAM access. The next major step is clearing FRAM write protection for FR4xx and then doing the first cautious FRAM write/readback at a known-safe address.
+This repo is now past raw bring-up and has a validated SBW/JTAG control baseline with working RAM access. The next major step is the first cautious FRAM write/readback at a known-safe address on the target.
+
+The FRAM protection clear/restore path is now implemented for FR4133, and the shell exposes `fram-smoke16 <addr> <value>` to read the original FRAM word, write a test value, verify it, restore the original word, and verify the restore. Live FRAM validation is still pending a confirmed safe scratch address on the target.
 
 Current shell commands:
 
@@ -149,6 +153,7 @@ Current shell commands:
 - `sync-por`
 - `read-mem16 <addr>`
 - `write-read-mem16 <addr> <value>`
+- `fram-smoke16 <addr> <value>`
 - `clock-test [cycles]`
 - `slot-test <tms> <tdi>`
 
