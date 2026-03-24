@@ -90,6 +90,9 @@ The project now includes a minimal Pico SDK scaffold aimed at safe hardware brin
 
 - `src/sbw_hw.c` owns the physical pins and keeps `GP3` high-impedance unless explicitly driven
 - `src/sbw_transport_gpio.c` implements a conservative software `io_bit()` shape plus the documented SBW entry and release sequences
+- the current GPIO transport uses only compile-time timing constants, with both slot phases compiled to fixed cycle counts from `SYS_CLK_HZ`
+- the active-session slot timing is fixed at `100 ns` high and `100 ns` low, with interrupts masked only around each short active-session low pulse
+- the current GPIO hot path uses direct `SIO` register writes and only changes `SBWTDIO` direction when ownership actually changes
 - `src/sbw_jtag.c` layers a minimal JTAG smoke-test path on top of the transport
 - `src/main.c` exposes a small USB serial shell for early tests and analyzer-assisted bring-up
 
@@ -118,6 +121,18 @@ Current bench verification on the wired `MSP430FR4133`:
 - `write-read-mem16 0x2002 0xA55A` verified RAM write/readback
 - the smoke test passed repeatedly across multiple target power cycles
 
+Current functional regression sequence:
+
+- `power-on`
+- `read-jtagid`
+- `bypass-test`
+- `sync-por`
+- `read-mem16 0xfffe`
+- `read-mem16 0xfffc`
+- `write-read-mem16 0x2000 0x1234`
+- `write-read-mem16 0x2002 0xA55A`
+- `power-off`
+
 This repo is now past raw bring-up and has a validated SBW/JTAG control baseline with working RAM access. The next major step is clearing FRAM write protection for FR4xx and then doing the first cautious FRAM write/readback at a known-safe address.
 
 Current shell commands:
@@ -134,8 +149,10 @@ Current shell commands:
 - `sync-por`
 - `read-mem16 <addr>`
 - `write-read-mem16 <addr> <value>`
-- `clock-test [cycles] [low_us] [high_us]`
-- `slot-test <tms> <tdi> [low_us] [high_us] [sample_us]`
+- `clock-test [cycles]`
+- `slot-test <tms> <tdi>`
+
+`slot-test` is only a waveform/debug probe. Its sampled return value is undefined unless the target is already in a valid JTAG state and expecting that bit.
 
 ## Build Notes
 

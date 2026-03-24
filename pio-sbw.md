@@ -139,6 +139,18 @@ The current code implements these ideas as:
 - `sbw_transport_slot_tdo()`
 - `sbw_transport_slot_tmsldh()`
 
+The current reference transport keeps the timing model intentionally small:
+
+- one compile-time low-phase duration per slot
+- one compile-time high-phase duration per slot
+- no separate user-facing sample-delay parameter
+
+Instead, both slot phases are held with `busy_wait_at_least_cycles()` delays using cycle counts derived at compile time from `SYS_CLK_HZ`. Interrupts are masked only for the low phase, and the `TDO` sample is taken at the end of that low window immediately before returning `SBWTCK` high.
+
+The current validated active-session baseline is a fixed compile-time `100 ns` high and `100 ns` low per slot.
+
+The current GPIO reference also uses direct `SIO` register writes for the hot path and avoids redundant `SBWTDIO` direction writes when the line is already owned by the Pico.
+
 ### 3. Saved TCLK State
 
 This is the non-obvious part that mattered for memory access.
@@ -154,7 +166,7 @@ static bool g_tclk_high = true;
 and exposes:
 
 ```c
-void sbw_transport_tclk_set(bool high, const sbw_timing_t *timing);
+void sbw_transport_tclk_set(bool high);
 bool sbw_transport_tclk_is_high(void);
 ```
 

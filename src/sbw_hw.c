@@ -1,9 +1,16 @@
 #include "sbw_hw.h"
 
 #include "hardware/gpio.h"
+#include "hardware/structs/sio.h"
 #include "pico/stdlib.h"
 
 #include "sbw_pins.h"
+
+enum {
+    SBW_CLOCK_MASK = 1u << SBW_PIN_CLOCK,
+    SBW_DATA_MASK = 1u << SBW_PIN_DATA,
+    SBW_TARGET_POWER_MASK = 1u << SBW_PIN_TARGET_POWER,
+};
 
 static bool g_target_power_enabled;
 static bool g_data_is_driving;
@@ -33,14 +40,14 @@ void sbw_hw_init(void) {
 
 void sbw_hw_target_power_set(bool enabled) {
     if (enabled) {
-        gpio_put(SBW_PIN_TARGET_POWER, 1);
-        gpio_set_dir(SBW_PIN_TARGET_POWER, GPIO_OUT);
+        sio_hw->gpio_set = SBW_TARGET_POWER_MASK;
+        sio_hw->gpio_oe_set = SBW_TARGET_POWER_MASK;
         g_target_power_enabled = true;
         sleep_ms(SBW_TARGET_POWER_SETTLE_MS);
         return;
     }
 
-    gpio_set_dir(SBW_PIN_TARGET_POWER, GPIO_IN);
+    sio_hw->gpio_oe_clr = SBW_TARGET_POWER_MASK;
     sbw_disable_pulls(SBW_PIN_TARGET_POWER);
     g_target_power_enabled = false;
 }
@@ -50,15 +57,12 @@ bool sbw_hw_target_power_enabled(void) {
 }
 
 void sbw_hw_clock_drive(bool high) {
-    gpio_put(SBW_PIN_CLOCK, high ? 1 : 0);
+    if (high) {
+        sio_hw->gpio_set = SBW_CLOCK_MASK;
+    } else {
+        sio_hw->gpio_clr = SBW_CLOCK_MASK;
+    }
     g_clock_is_high = high;
-}
-
-void sbw_hw_clock_pulse_us(uint32_t low_us, uint32_t high_us) {
-    sbw_hw_clock_drive(false);
-    busy_wait_us_32(low_us);
-    sbw_hw_clock_drive(true);
-    busy_wait_us_32(high_us);
 }
 
 bool sbw_hw_clock_is_high(void) {
@@ -66,15 +70,23 @@ bool sbw_hw_clock_is_high(void) {
 }
 
 void sbw_hw_data_drive(bool level) {
-    gpio_put(SBW_PIN_DATA, level);
-    gpio_set_dir(SBW_PIN_DATA, GPIO_OUT);
-    g_data_is_driving = true;
+    if (level) {
+        sio_hw->gpio_set = SBW_DATA_MASK;
+    } else {
+        sio_hw->gpio_clr = SBW_DATA_MASK;
+    }
+
+    if (!g_data_is_driving) {
+        sio_hw->gpio_oe_set = SBW_DATA_MASK;
+        g_data_is_driving = true;
+    }
 }
 
 void sbw_hw_data_release(void) {
-    gpio_set_dir(SBW_PIN_DATA, GPIO_IN);
-    sbw_disable_pulls(SBW_PIN_DATA);
-    g_data_is_driving = false;
+    if (g_data_is_driving) {
+        sio_hw->gpio_oe_clr = SBW_DATA_MASK;
+        g_data_is_driving = false;
+    }
 }
 
 bool sbw_hw_data_is_driving(void) {
@@ -82,5 +94,5 @@ bool sbw_hw_data_is_driving(void) {
 }
 
 bool sbw_hw_data_read(void) {
-    return gpio_get(SBW_PIN_DATA);
+    return (sio_hw->gpio_in & SBW_DATA_MASK) != 0;
 }

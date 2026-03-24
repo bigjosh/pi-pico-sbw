@@ -1,26 +1,45 @@
 #include "sbw_transport.h"
 
 #include "hardware/sync.h"
-#include "hardware/timer.h"
 #include "pico/stdlib.h"
 
 #include "sbw_hw.h"
 #include "sbw_pins.h"
 
 enum {
-    SBW_EXIT_HOLD_US = 200,
+    SBW_EXIT_HOLD_NS = 200000,
     SBW_ENTRY_RST_HIGH_TEST_RESET_MS = 4,
     SBW_ENTRY_RST_HIGH_TEST_ENABLE_MS = 20,
-    SBW_ENTRY_RST_HIGH_SETUP_US = 60,
+    SBW_ENTRY_RST_HIGH_SETUP_NS = 60000,
     SBW_ENTRY_RST_LOW_TEST_RESET_MS = 1,
     SBW_ENTRY_RST_LOW_HOLD_RESET_MS = 50,
     SBW_ENTRY_RST_LOW_TEST_ENABLE_MS = 100,
-    SBW_ENTRY_RST_LOW_SETUP_US = 40,
-    SBW_ENTRY_PULSE_LOW_US = 1,
+    SBW_ENTRY_RST_LOW_SETUP_NS = 40000,
+    SBW_ENTRY_PULSE_LOW_NS = 1000,
     SBW_ENTRY_POST_ENABLE_MS = 5,
 };
 
+#define SBW_NS_TO_CYCLES(delay_ns) \
+    ((uint32_t)((((uint64_t)SYS_CLK_HZ) * (uint64_t)(delay_ns) + 999999999ull) / 1000000000ull))
+
+enum {
+    SBW_EXIT_HOLD_CYCLES = SBW_NS_TO_CYCLES(SBW_EXIT_HOLD_NS),
+    SBW_ENTRY_RST_HIGH_SETUP_CYCLES = SBW_NS_TO_CYCLES(SBW_ENTRY_RST_HIGH_SETUP_NS),
+    SBW_ENTRY_RST_LOW_SETUP_CYCLES = SBW_NS_TO_CYCLES(SBW_ENTRY_RST_LOW_SETUP_NS),
+    SBW_ENTRY_PULSE_LOW_CYCLES = SBW_NS_TO_CYCLES(SBW_ENTRY_PULSE_LOW_NS),
+    SBW_ACTIVE_SLOT_LOW_CYCLES = SBW_NS_TO_CYCLES(SBW_ACTIVE_SLOT_LOW_NS),
+    SBW_ACTIVE_SLOT_HIGH_CYCLES = SBW_NS_TO_CYCLES(SBW_ACTIVE_SLOT_HIGH_NS),
+};
+
 static bool g_tclk_high = true;
+
+static void sbw_transport_wait_cycles(uint32_t cycles) {
+    if (cycles == 0) {
+        return;
+    }
+
+    busy_wait_at_least_cycles(cycles);
+}
 
 static uint32_t sbw_transport_low_phase_begin(void) {
     const uint32_t irq_state = save_and_disable_interrupts();
@@ -33,53 +52,48 @@ static void sbw_transport_low_phase_end(uint32_t irq_state) {
     restore_interrupts(irq_state);
 }
 
-static void sbw_transport_short_clock_pulse_low(uint32_t low_us) {
+static void sbw_transport_pulse_low_cycles(uint32_t low_cycles) {
     const uint32_t irq_state = sbw_transport_low_phase_begin();
-    busy_wait_us_32(low_us);
+    sbw_transport_wait_cycles(low_cycles);
     sbw_transport_low_phase_end(irq_state);
 }
 
-static void sbw_transport_slot_drive(bool level, const sbw_timing_t *timing) {
-    sbw_hw_data_drive(level);
-    busy_wait_us_32(timing->clock_high_us);
-    sbw_transport_short_clock_pulse_low(timing->clock_low_us);
+static void sbw_transport_short_clock_pulse_low(void) {
+    sbw_transport_pulse_low_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES);
 }
 
-static void sbw_transport_slot_tmsldh(const sbw_timing_t *timing) {
-    uint32_t low_before_drive_us = timing->clock_low_us / 2;
-    if (low_before_drive_us == 0) {
-        low_before_drive_us = 1;
-    }
-    if (low_before_drive_us >= timing->clock_low_us) {
-        low_before_drive_us = timing->clock_low_us - 1;
+static void sbw_transport_slot_drive(bool level) {
+    sbw_hw_data_drive(level);
+    sbw_transport_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
+    sbw_transport_short_clock_pulse_low();
+}
+
+static void sbw_transport_slot_tmsldh(void) {
+    uint32_t low_before_drive_cycles = SBW_ACTIVE_SLOT_LOW_CYCLES / 2;
+    if (SBW_ACTIVE_SLOT_LOW_CYCLES > 1) {
+        if (low_before_drive_cycles == 0) {
+            low_before_drive_cycles = 1;
+        }
+        if (low_before_drive_cycles >= SBW_ACTIVE_SLOT_LOW_CYCLES) {
+            low_before_drive_cycles = SBW_ACTIVE_SLOT_LOW_CYCLES - 1;
+        }
     }
 
     sbw_hw_data_drive(false);
-    busy_wait_us_32(timing->clock_high_us);
+    sbw_transport_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
     const uint32_t irq_state = sbw_transport_low_phase_begin();
-    busy_wait_us_32(low_before_drive_us);
+    sbw_transport_wait_cycles(low_before_drive_cycles);
     sbw_hw_data_drive(true);
-    busy_wait_us_32(timing->clock_low_us - low_before_drive_us);
+    sbw_transport_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES - low_before_drive_cycles);
     sbw_transport_low_phase_end(irq_state);
 }
 
-static bool sbw_transport_slot_tdo(bool sample, const sbw_timing_t *timing) {
+static bool sbw_transport_slot_tdo(bool sample) {
     sbw_hw_data_release();
-    busy_wait_us_32(timing->clock_high_us);
+    sbw_transport_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
     const uint32_t irq_state = sbw_transport_low_phase_begin();
-
-    if (!sample) {
-        busy_wait_us_32(timing->clock_low_us);
-        sbw_transport_low_phase_end(irq_state);
-        return false;
-    }
-
-    busy_wait_us_32(timing->sample_delay_us);
-    const bool tdo = sbw_hw_data_read();
-
-    if (timing->clock_low_us > timing->sample_delay_us) {
-        busy_wait_us_32(timing->clock_low_us - timing->sample_delay_us);
-    }
+    sbw_transport_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES);
+    const bool tdo = sample ? sbw_hw_data_read() : false;
 
     sbw_transport_low_phase_end(irq_state);
     return tdo;
@@ -96,10 +110,10 @@ static void sbw_transport_entry_rst_high(void) {
     sleep_ms(SBW_ENTRY_RST_HIGH_TEST_ENABLE_MS);
 
     sbw_hw_data_drive(true);
-    busy_wait_us_32(SBW_ENTRY_RST_HIGH_SETUP_US);
+    sbw_transport_wait_cycles(SBW_ENTRY_RST_HIGH_SETUP_CYCLES);
 
-    sbw_transport_short_clock_pulse_low(SBW_ENTRY_PULSE_LOW_US);
-    busy_wait_us_32(SBW_ENTRY_RST_HIGH_SETUP_US);
+    sbw_transport_pulse_low_cycles(SBW_ENTRY_PULSE_LOW_CYCLES);
+    sbw_transport_wait_cycles(SBW_ENTRY_RST_HIGH_SETUP_CYCLES);
 
     sleep_ms(SBW_ENTRY_POST_ENABLE_MS);
 }
@@ -115,46 +129,12 @@ static void sbw_transport_entry_rst_low(void) {
     sleep_ms(SBW_ENTRY_RST_LOW_TEST_ENABLE_MS);
 
     sbw_hw_data_drive(true);
-    busy_wait_us_32(SBW_ENTRY_RST_LOW_SETUP_US);
+    sbw_transport_wait_cycles(SBW_ENTRY_RST_LOW_SETUP_CYCLES);
 
-    sbw_transport_short_clock_pulse_low(SBW_ENTRY_PULSE_LOW_US);
-    busy_wait_us_32(SBW_ENTRY_RST_LOW_SETUP_US);
+    sbw_transport_pulse_low_cycles(SBW_ENTRY_PULSE_LOW_CYCLES);
+    sbw_transport_wait_cycles(SBW_ENTRY_RST_LOW_SETUP_CYCLES);
 
     sleep_ms(SBW_ENTRY_POST_ENABLE_MS);
-}
-
-static sbw_timing_t sbw_normalize_timing(const sbw_timing_t *timing) {
-    sbw_timing_t normalized = {
-        .clock_low_us = SBW_DEFAULT_CLOCK_LOW_US,
-        .clock_high_us = SBW_DEFAULT_CLOCK_HIGH_US,
-        .sample_delay_us = SBW_DEFAULT_SAMPLE_DELAY_US,
-    };
-
-    if (!timing) {
-        return normalized;
-    }
-
-    if (timing->clock_low_us > 0) {
-        normalized.clock_low_us = timing->clock_low_us;
-    }
-
-    if (timing->clock_high_us > 0) {
-        normalized.clock_high_us = timing->clock_high_us;
-    }
-
-    if (timing->sample_delay_us > 0) {
-        normalized.sample_delay_us = timing->sample_delay_us;
-    }
-
-    if (normalized.sample_delay_us >= normalized.clock_low_us) {
-        normalized.sample_delay_us = normalized.clock_low_us / 2;
-        if (normalized.sample_delay_us == 0) {
-            normalized.sample_delay_us = 1;
-            normalized.clock_low_us = 2;
-        }
-    }
-
-    return normalized;
 }
 
 void sbw_transport_init(void) {
@@ -182,50 +162,38 @@ void sbw_transport_release(void) {
     g_tclk_high = true;
     sbw_hw_data_release();
     sbw_hw_clock_drive(false);
-    busy_wait_us_32(SBW_EXIT_HOLD_US);
+    sbw_transport_wait_cycles(SBW_EXIT_HOLD_CYCLES);
 }
 
-void sbw_transport_clock_test(uint32_t cycles, uint32_t low_us, uint32_t high_us) {
+void sbw_transport_clock_test(uint32_t cycles) {
     if (cycles == 0) {
         return;
-    }
-
-    if (low_us == 0) {
-        low_us = SBW_DEFAULT_CLOCK_LOW_US;
-    }
-
-    if (high_us == 0) {
-        high_us = SBW_DEFAULT_CLOCK_HIGH_US;
     }
 
     sbw_transport_release();
 
     for (uint32_t i = 0; i < cycles; ++i) {
-        sbw_transport_short_clock_pulse_low(low_us);
-        busy_wait_us_32(high_us);
+        sbw_transport_short_clock_pulse_low();
+        sbw_transport_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
     }
 }
 
-bool sbw_transport_io_bit(bool tms, bool tdi, const sbw_timing_t *timing) {
-    const sbw_timing_t active = sbw_normalize_timing(timing);
-
+bool sbw_transport_io_bit(bool tms, bool tdi) {
     // Each logical JTAG bit is encoded as TMS, TDI, then a released TDO slot.
-    sbw_transport_slot_drive(tms, &active);
-    sbw_transport_slot_drive(tdi, &active);
-    return sbw_transport_slot_tdo(true, &active);
+    sbw_transport_slot_drive(tms);
+    sbw_transport_slot_drive(tdi);
+    return sbw_transport_slot_tdo(true);
 }
 
-void sbw_transport_tclk_set(bool high, const sbw_timing_t *timing) {
-    const sbw_timing_t active = sbw_normalize_timing(timing);
-
+void sbw_transport_tclk_set(bool high) {
     if (g_tclk_high) {
-        sbw_transport_slot_tmsldh(&active);
+        sbw_transport_slot_tmsldh();
     } else {
-        sbw_transport_slot_drive(false, &active);
+        sbw_transport_slot_drive(false);
     }
 
-    sbw_transport_slot_drive(high, &active);
-    (void)sbw_transport_slot_tdo(false, &active);
+    sbw_transport_slot_drive(high);
+    (void)sbw_transport_slot_tdo(false);
     g_tclk_high = high;
 }
 

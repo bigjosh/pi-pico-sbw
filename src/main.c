@@ -10,12 +10,6 @@
 #include "sbw_pins.h"
 #include "sbw_transport.h"
 
-static const sbw_timing_t k_default_timing = {
-    .clock_low_us = SBW_DEFAULT_CLOCK_LOW_US,
-    .clock_high_us = SBW_DEFAULT_CLOCK_HIGH_US,
-    .sample_delay_us = SBW_DEFAULT_SAMPLE_DELAY_US,
-};
-
 static bool ensure_target_powered(void);
 
 static bool read_line(char *buffer, size_t size) {
@@ -62,8 +56,8 @@ static void print_help(void) {
     printf("  sync-por\n");
     printf("  read-mem16 <addr>\n");
     printf("  write-read-mem16 <addr> <value>\n");
-    printf("  clock-test [cycles] [low_us] [high_us]\n");
-    printf("  slot-test <tms:0|1> <tdi:0|1> [low_us] [high_us] [sample_us]\n");
+    printf("  clock-test [cycles]\n");
+    printf("  slot-test <tms:0|1> <tdi:0|1>  (debug waveform probe)\n");
 }
 
 static void print_pins(void) {
@@ -111,15 +105,11 @@ static void lowercase(char *text) {
     }
 }
 
-static void handle_clock_test(char *arg1, char *arg2, char *arg3) {
+static void handle_clock_test(char *arg1) {
     uint32_t cycles = 16;
-    uint32_t low_us = SBW_DEFAULT_CLOCK_LOW_US;
-    uint32_t high_us = SBW_DEFAULT_CLOCK_HIGH_US;
 
-    if ((arg1 && !parse_u32(arg1, &cycles)) ||
-        (arg2 && !parse_u32(arg2, &low_us)) ||
-        (arg3 && !parse_u32(arg3, &high_us))) {
-        printf("usage: clock-test [cycles] [low_us] [high_us]\n");
+    if (arg1 && !parse_u32(arg1, &cycles)) {
+        printf("usage: clock-test [cycles]\n");
         return;
     }
 
@@ -127,29 +117,21 @@ static void handle_clock_test(char *arg1, char *arg2, char *arg3) {
         return;
     }
 
-    printf("clock-test cycles=%lu low=%luus high=%luus\n",
+    printf("clock-test cycles=%lu low=%uns high=%uns\n",
         (unsigned long)cycles,
-        (unsigned long)low_us,
-        (unsigned long)high_us);
+        SBW_ACTIVE_SLOT_LOW_NS,
+        SBW_ACTIVE_SLOT_HIGH_NS);
 
-    sbw_transport_clock_test(cycles, low_us, high_us);
+    sbw_transport_clock_test(cycles);
     printf("clock-test complete\n");
 }
 
-static void handle_slot_test(char *arg1, char *arg2, char *arg3, char *arg4, char *arg5) {
+static void handle_slot_test(char *arg1, char *arg2) {
     bool tms = false;
     bool tdi = false;
-    sbw_timing_t timing = k_default_timing;
 
     if (!parse_bit(arg1, &tms) || !parse_bit(arg2, &tdi)) {
-        printf("usage: slot-test <tms:0|1> <tdi:0|1> [low_us] [high_us] [sample_us]\n");
-        return;
-    }
-
-    if ((arg3 && !parse_u32(arg3, &timing.clock_low_us)) ||
-        (arg4 && !parse_u32(arg4, &timing.clock_high_us)) ||
-        (arg5 && !parse_u32(arg5, &timing.sample_delay_us))) {
-        printf("usage: slot-test <tms:0|1> <tdi:0|1> [low_us] [high_us] [sample_us]\n");
+        printf("usage: slot-test <tms:0|1> <tdi:0|1>\n");
         return;
     }
 
@@ -157,17 +139,16 @@ static void handle_slot_test(char *arg1, char *arg2, char *arg3, char *arg4, cha
         return;
     }
 
-    printf("slot-test tms=%u tdi=%u low=%luus high=%luus sample=%luus\n",
+    printf("slot-test tms=%u tdi=%u low=%uns high=%uns\n",
         tms ? 1u : 0u,
         tdi ? 1u : 0u,
-        (unsigned long)timing.clock_low_us,
-        (unsigned long)timing.clock_high_us,
-        (unsigned long)timing.sample_delay_us);
+        SBW_ACTIVE_SLOT_LOW_NS,
+        SBW_ACTIVE_SLOT_HIGH_NS);
 
-    const bool tdo = sbw_transport_io_bit(tms, tdi, &timing);
+    const bool tdo = sbw_transport_io_bit(tms, tdi);
     sbw_transport_release();
 
-    printf("slot-test tdo=%u\n", tdo ? 1u : 0u);
+    printf("slot-test sampled=%u (undefined outside active JTAG session)\n", tdo ? 1u : 0u);
 }
 
 static bool ensure_target_powered(void) {
@@ -350,12 +331,12 @@ static void handle_command(char *line) {
     }
 
     if (strcmp(argv[0], "clock-test") == 0) {
-        handle_clock_test(argv[1], argv[2], argv[3]);
+        handle_clock_test(argv[1]);
         return;
     }
 
     if (strcmp(argv[0], "slot-test") == 0) {
-        handle_slot_test(argv[1], argv[2], argv[3], argv[4], argv[5]);
+        handle_slot_test(argv[1], argv[2]);
         return;
     }
 

@@ -23,18 +23,12 @@ enum {
     SBW_WDTCTL_HOLD = 0x5A80,
 };
 
-static const sbw_timing_t k_jtag_timing = {
-    .clock_low_us = 5,
-    .clock_high_us = 5,
-    .sample_delay_us = 2,
-};
-
 static bool sbw_jtag_io_bit(bool tms, bool tdi) {
-    return sbw_transport_io_bit(tms, tdi, &k_jtag_timing);
+    return sbw_transport_io_bit(tms, tdi);
 }
 
 static void sbw_jtag_tclk_set(bool high) {
-    sbw_transport_tclk_set(high, &k_jtag_timing);
+    sbw_transport_tclk_set(high);
 }
 
 static void sbw_jtag_begin_session(void) {
@@ -66,15 +60,17 @@ static void sbw_jtag_finish_shift(void) {
 
 static uint8_t sbw_jtag_shift_ir8(uint8_t instruction) {
     uint8_t captured = 0;
+    uint8_t shift = instruction;
 
     sbw_jtag_go_to_shift_ir();
 
     // MSP430 JTAG instructions are shifted LSB first.
-    for (uint32_t bit = 0; bit < 8; ++bit) {
-        const bool tms = (bit == 7);
-        const bool tdi = ((instruction >> bit) & 0x1u) != 0;
-        captured = (uint8_t)((captured << 1) | (sbw_jtag_io_bit(tms, tdi) ? 1u : 0u));
+    for (uint32_t bit = 0; bit < 7; ++bit) {
+        const bool tdi = (shift & 0x1u) != 0;
+        captured = (uint8_t)((captured << 1) | (sbw_jtag_io_bit(false, tdi) ? 1u : 0u));
+        shift >>= 1;
     }
+    captured = (uint8_t)((captured << 1) | (sbw_jtag_io_bit(true, (shift & 0x1u) != 0) ? 1u : 0u));
 
     sbw_jtag_finish_shift();
     return captured;
@@ -82,15 +78,17 @@ static uint8_t sbw_jtag_shift_ir8(uint8_t instruction) {
 
 static uint16_t sbw_jtag_shift_dr16(uint16_t data) {
     uint16_t captured = 0;
+    uint16_t shift = data;
 
     sbw_jtag_go_to_shift_dr();
 
     // MSP430 JTAG data words are shifted MSB first.
-    for (uint32_t bit = 0; bit < 16; ++bit) {
-        const bool tms = (bit == 15);
-        const bool tdi = ((data >> (15 - bit)) & 0x1u) != 0;
-        captured = (uint16_t)((captured << 1) | (sbw_jtag_io_bit(tms, tdi) ? 1u : 0u));
+    for (uint32_t bit = 0; bit < 15; ++bit) {
+        const bool tdi = (shift & 0x8000u) != 0;
+        captured = (uint16_t)((captured << 1) | (sbw_jtag_io_bit(false, tdi) ? 1u : 0u));
+        shift <<= 1;
     }
+    captured = (uint16_t)((captured << 1) | (sbw_jtag_io_bit(true, (shift & 0x8000u) != 0) ? 1u : 0u));
 
     sbw_jtag_finish_shift();
     return captured;
@@ -98,14 +96,16 @@ static uint16_t sbw_jtag_shift_dr16(uint16_t data) {
 
 static uint32_t sbw_jtag_shift_dr20(uint32_t data) {
     uint32_t captured = 0;
+    uint32_t shift = data & 0x000FFFFFu;
 
     sbw_jtag_go_to_shift_dr();
 
-    for (uint32_t bit = 0; bit < 20; ++bit) {
-        const bool tms = (bit == 19);
-        const bool tdi = ((data >> (19 - bit)) & 0x1u) != 0;
-        captured = (captured << 1) | (sbw_jtag_io_bit(tms, tdi) ? 1u : 0u);
+    for (uint32_t bit = 0; bit < 19; ++bit) {
+        const bool tdi = (shift & 0x00080000u) != 0;
+        captured = (captured << 1) | (sbw_jtag_io_bit(false, tdi) ? 1u : 0u);
+        shift <<= 1;
     }
+    captured = (captured << 1) | (sbw_jtag_io_bit(true, (shift & 0x00080000u) != 0) ? 1u : 0u);
 
     sbw_jtag_finish_shift();
     return captured & 0x000FFFFFu;
