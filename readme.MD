@@ -91,8 +91,9 @@ The project now includes a minimal Pico SDK scaffold aimed at safe hardware brin
 - `src/sbw_hw.c` owns the physical pins and keeps `GP3` high-impedance unless explicitly driven
 - `src/sbw_transport_gpio.c` implements a conservative software `io_bit()` shape plus the documented SBW entry and release sequences
 - the current GPIO transport uses only compile-time timing constants, with both slot phases compiled to fixed cycle counts from `SYS_CLK_HZ`
-- the active-session slot timing is fixed at `100 ns` high and `100 ns` low, with interrupts masked only around each short active-session low pulse
+- the active-session slot timing is fixed at `50 ns` low with no explicit added high delay; the effective high time comes from inherent software overhead, and interrupts are masked only around each short active-session low pulse
 - the current GPIO hot path uses direct `SIO` register writes and only changes `SBWTDIO` direction when ownership actually changes
+- the hot transport/JTAG files are built with LTO; the USB shell file is left out because full-target LTO conflicts with the current Pico stdio wrapper path
 - `src/sbw_jtag.c` layers a minimal JTAG smoke-test path on top of the transport
 - `src/main.c` exposes a small USB serial shell for early tests and analyzer-assisted bring-up
 
@@ -126,7 +127,7 @@ Current bench verification on the wired `MSP430FR4133`:
 - `fram-smoke16 0xC400 0x1234` verified write/read/restore on live FRAM
 - `fram-smoke16 0xC402 0xA55A` verified write/read/restore on live FRAM
 - `quick-read16 0xC400 4` matched four known FRAM words written with the standard path
-- `fram-bench 0xC400 5120` wrote and verified `10,240` bytes in `1,403,611 us`
+- `fram-bench 0xC400 5120` wrote and verified `10,240` bytes in `492,456 us`
 - the smoke test passed repeatedly across multiple target power cycles
 
 Current functional regression sequence:
@@ -143,7 +144,7 @@ Current functional regression sequence:
 
 This repo is now past raw bring-up and has a validated SBW/JTAG control baseline with working RAM and FRAM access. The current bulk-write path uses a single SBW/JTAG session with one FRAM unlock, repeated doc-based `WriteMem_430Xv2` word writes, and quick-read verification.
 
-On the current wired target, `fram-bench 0xC400 5120` verified a `10 KB` FRAM transfer in about `1.4 s`, which is roughly `7 KiB/s` write throughput and `39 KiB/s` quick-read verify throughput.
+On the current wired target, `fram-bench 0xC400 5120` verifies a `10 KB` FRAM transfer in about `0.49 s`, which is roughly `20 KiB/s` write throughput and `87 KiB/s` quick-read verify throughput.
 
 Current shell commands:
 

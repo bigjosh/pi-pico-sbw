@@ -29,6 +29,22 @@ target_link_libraries(pi_pico_sbw PRIVATE
     hardware_timer
 )
 
+set(SBW_LTO_FLAGS
+    -flto=auto
+    -fno-fat-lto-objects
+)
+
+set_source_files_properties(
+    src/sbw_hw.c
+    src/sbw_jtag.c
+    src/sbw_transport_gpio.c
+    PROPERTIES COMPILE_OPTIONS "${SBW_LTO_FLAGS}"
+)
+
+target_link_options(pi_pico_sbw PRIVATE
+    "${SBW_LTO_FLAGS}"
+)
+
 pico_enable_stdio_usb(pi_pico_sbw 1)
 pico_enable_stdio_uart(pi_pico_sbw 0)
 

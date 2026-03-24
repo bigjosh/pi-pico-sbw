@@ -147,9 +147,9 @@ The current reference transport keeps the timing model intentionally small:
 
 Instead, both slot phases are held with `busy_wait_at_least_cycles()` delays using cycle counts derived at compile time from `SYS_CLK_HZ`. Interrupts are masked only for the low phase, and the `TDO` sample is taken at the end of that low window immediately before returning `SBWTCK` high.
 
-The current validated active-session baseline is a fixed compile-time `100 ns` high and `100 ns` low per slot.
+The current validated active-session baseline is a fixed compile-time `50 ns` low per slot with no explicit added high delay. The effective high phase is just the inherent software overhead between slots.
 
-The current GPIO reference also uses direct `SIO` register writes for the hot path and avoids redundant `SBWTDIO` direction writes when the line is already owned by the Pico.
+The current GPIO reference also uses direct `SIO` register writes for the hot path, avoids redundant `SBWTDIO` direction writes when the line is already owned by the Pico, and uses narrowed LTO on the hot transport/JTAG files.
 
 ### 3. Saved TCLK State
 
