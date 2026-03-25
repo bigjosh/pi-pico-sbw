@@ -75,11 +75,6 @@ def ensure_system_clock():
         raise RuntimeError("expected 150000000 Hz system clock, got %d Hz" % actual)
     return actual
 
-
-def cycles_to_us(cycles):
-    return int(cycles) // 150
-
-
 def bytes_to_words_le(data):
     words = []
     for index in range(0, len(data), 2):

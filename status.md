@@ -3,7 +3,7 @@
 ## Snapshot
 
 - Branch: `codex/python-base-c-jtag`
-- Last committed base: `4f893db`
+- Last committed base: `9980665`
 - Current repo direction: MicroPython orchestration + native C `.mpy` JTAG engine
 - Older Pico SDK firmware path and abandoned `PIO` handoff material have been removed from the repo
 
@@ -25,19 +25,21 @@ Validated environment:
 
 Important runtime requirement:
 
-- the native module assumes `150 MHz`
-- `SBWNative()` now attempts `machine.freq(150000000)` at startup
-- startup reads the clock back and raises if the board did not actually take `150 MHz`
+- the native module is compiled for a maximum `150 MHz` system clock
+- actual `clk_sys` must stay `<= SYS_CLK_HZ` or the native delay loops may violate `SBW` timing minimums
+- the current `SBWNative()` wrapper enforces this conservatively by attempting `machine.freq(150000000)` and checking the result
 
 Latest verified results:
 
 - `testsuite.run_regression()` -> `True`
-- `testsuite.run_bench()` -> `(True, (5120, 134647, 135167, 5120, 0, 0))`
+- `testsuite.run_bench()` -> `(True, (5120, 135506, 136416, 135392, 136275))`
 - regression now explicitly exercises `read_block16(0xFFFC, 2)` and expects `0xEE44, 0xEDC8`
-- That is `10,240` bytes in `134,647 us` write and `135,167 us` verify
+- The Python-side round-trip benchmark writes a generated `10,240` byte buffer, reads it back and verifies it, inverts every bit, then repeats the write/read/verify cycle
 - Approximate throughput:
-  - write: `74 KiB/s`
-  - verify: `74 KiB/s`
+  - write pass 1: `74 KiB/s`
+  - read pass 1: `73 KiB/s`
+  - write pass 2: `74 KiB/s`
+  - read pass 2: `73 KiB/s`
 
 ## Current File Map
 
@@ -53,13 +55,13 @@ Latest verified results:
 ### `mpy/`
 
 - [mpy/main.py](D:/Github/pi-pico-sbw/mpy/main.py)
-  Interactive MicroPython shell. Exposes power control and high-level commands like `read-jtagid`, `bypass-test`, `sync-por`, `read-mem16`, `fram-smoke16`, and `fram-bench`.
+  Interactive MicroPython shell. Exposes power control and high-level commands like `read-jtagid`, `bypass-test`, `sync-por`, `read-mem16`, `fram-smoke16`, and the Python-side `fram-bench`.
 - [mpy/sbw.py](D:/Github/pi-pico-sbw/mpy/sbw.py)
-  Thin Python wrapper around the native module. Handles pin setup, target power switching, small formatting helpers, and method forwarding into native C.
+  Thin Python wrapper around the native module. Handles pin setup, target power switching, small formatting helpers, method forwarding into native C, and the Python-side `fram_smoke16` helper.
 - [mpy/sbw_config.py](D:/Github/pi-pico-sbw/mpy/sbw_config.py)
   Hardware descriptor tuple, `RP2350` `SIO` MMIO addresses, pin assignments, regression constants, and the `150 MHz` clock setup/verification helper.
 - [mpy/testsuite.py](D:/Github/pi-pico-sbw/mpy/testsuite.py)
-  Automated regression and benchmark entry points for the live MicroPython path.
+  Automated regression and Python-side benchmark entry points for the live MicroPython path.
 - [mpy/README.md](D:/Github/pi-pico-sbw/mpy/README.md)
   Detailed build/deploy notes for the MicroPython path.
 
@@ -74,8 +76,7 @@ Latest verified results:
   - `JTAG` TAP reset and IR/DR shifting
   - `SyncJtag_AssertPor` / `POR` flow
   - target memory read/write
-  - FRAM smoke test
-  - FRAM benchmark
+  It intentionally does not contain benchmark timing, smoke-test policy, or synthetic-pattern policy anymore.
 - [mpy/native/Makefile](D:/Github/pi-pico-sbw/mpy/native/Makefile)
   Build rules for generating `sbw_native.mpy` using MicroPython `dynruntime.mk`.
 

@@ -35,13 +35,7 @@ enum {
     SBW_INFO_FRAM_END_FR4133 = 0x19FF,
     SBW_MAIN_FRAM_START_FR4133 = 0xC400,
     SBW_MAIN_FRAM_END_FR4133 = 0xFFFF,
-    SBW_MAIN_FRAM_BENCH_END_FR4133 = 0xFF7E,
     SBW_NOP = 0x4303,
-    ARM_DEMCR_ADDR = 0xE000EDFCu,
-    ARM_DEMCR_TRCENA = 1u << 24,
-    ARM_DWT_CTRL_ADDR = 0xE0001000u,
-    ARM_DWT_CYCCNT_ADDR = 0xE0001004u,
-    ARM_DWT_CTRL_CYCCNTENA = 1u << 0,
 };
 
 #define SBW_NS_TO_CYCLES(ns) ((uint32_t)((((uint64_t)SBW_SYS_CLK_HZ) * (uint64_t)(ns) + 999999999ull) / 1000000000ull))
@@ -77,20 +71,6 @@ typedef struct {
     sbw_hw_desc_t hw;
     bool tclk_high;
 } sbw_ctx_t;
-
-typedef struct {
-    uint16_t original;
-    uint16_t test_readback;
-    uint16_t restored_readback;
-} sbw_fram_smoke_result_t;
-
-typedef struct {
-    uint32_t write_cycles;
-    uint32_t verify_cycles;
-    uint32_t mismatch_index;
-    uint16_t mismatch_expected;
-    uint16_t mismatch_actual;
-} sbw_fram_bench_result_t;
 
 static inline void sbw_wait_cycles(uint32_t cycles) {
     if (cycles == 0) {
@@ -132,18 +112,6 @@ static inline uint32_t sbw_mmio_read(volatile uint32_t *addr) {
 
 static inline volatile uint32_t *sbw_mmio_ptr(uint32_t address) {
     return (volatile uint32_t *)(uintptr_t)address;
-}
-
-static inline void sbw_dwt_enable(void) {
-    sbw_mmio_write(sbw_mmio_ptr(ARM_DEMCR_ADDR),
-        sbw_mmio_read(sbw_mmio_ptr(ARM_DEMCR_ADDR)) | ARM_DEMCR_TRCENA);
-    sbw_mmio_write(sbw_mmio_ptr(ARM_DWT_CYCCNT_ADDR), 0u);
-    sbw_mmio_write(sbw_mmio_ptr(ARM_DWT_CTRL_ADDR),
-        sbw_mmio_read(sbw_mmio_ptr(ARM_DWT_CTRL_ADDR)) | ARM_DWT_CTRL_CYCCNTENA);
-}
-
-static inline uint32_t sbw_dwt_now(void) {
-    return sbw_mmio_read(sbw_mmio_ptr(ARM_DWT_CYCCNT_ADDR));
 }
 
 static void sbw_parse_hw_desc(mp_obj_t hw_in, sbw_hw_desc_t *hw) {
@@ -593,34 +561,6 @@ static bool sbw_set_pc_430xv2(sbw_ctx_t *ctx, uint32_t address) {
     return true;
 }
 
-static uint16_t sbw_pattern_word(size_t index) {
-    return (uint16_t)(0xA55Au ^ ((uint16_t)index * 0x1357u) ^ (uint16_t)(index >> 4));
-}
-
-static bool sbw_fram_range_allowed(uint32_t address, size_t word_count) {
-    const uint32_t start = address & 0x000FFFFFu;
-
-    if ((start & 0x1u) != 0) {
-        return false;
-    }
-
-    if (word_count == 0) {
-        return true;
-    }
-
-    const uint32_t max_words = (0x00100000u - start) >> 1;
-    if (word_count > max_words) {
-        return false;
-    }
-
-    const uint32_t last = start + (((uint32_t)word_count - 1u) << 1);
-    if (start >= SBW_INFO_FRAM_START_FR4133 && last <= SBW_INFO_FRAM_END_FR4133) {
-        return true;
-    }
-
-    return start >= SBW_MAIN_FRAM_START_FR4133 && last <= SBW_MAIN_FRAM_BENCH_END_FR4133;
-}
-
 static uint16_t sbw_fram_protection_mask(uint32_t address) {
     const uint32_t masked = address & 0x000FFFFFu;
 
@@ -898,74 +838,6 @@ static bool sbw_write_block16_internal(sbw_ctx_t *ctx, uint32_t address, const u
     return write_ok && restore_ok;
 }
 
-static bool sbw_write_block16_pattern_internal(sbw_ctx_t *ctx, uint32_t address, size_t word_count) {
-    if (!sbw_in_full_emulation(ctx, NULL)) {
-        return false;
-    }
-
-    if (word_count == 0) {
-        return true;
-    }
-
-    uint16_t saved_fram_cfg = 0;
-    bool fram_cfg_changed = false;
-
-    if (!sbw_unlock_fram_for_address(ctx, address, &saved_fram_cfg, &fram_cfg_changed)) {
-        return false;
-    }
-
-    if (!sbw_begin_write_block16_quick_430xv2(ctx, address)) {
-        (void)sbw_restore_fram_protection(ctx, saved_fram_cfg, fram_cfg_changed);
-        return false;
-    }
-
-    for (size_t index = 0; index < word_count; ++index) {
-        sbw_write_block16_quick_word(ctx, sbw_pattern_word(index));
-    }
-
-    const bool write_ok = sbw_finish_write_block16_quick_430xv2(ctx);
-    const bool restore_ok = sbw_restore_fram_protection(ctx, saved_fram_cfg, fram_cfg_changed);
-    return write_ok && restore_ok;
-}
-
-static bool sbw_verify_block16_quick_pattern_internal(sbw_ctx_t *ctx,
-    uint32_t address,
-    size_t word_count,
-    sbw_fram_bench_result_t *result) {
-    if (word_count == 0) {
-        return true;
-    }
-
-    if (!sbw_set_pc_430xv2(ctx, address)) {
-        return false;
-    }
-
-    sbw_tclk_set(ctx, true);
-    sbw_shift_ir8_no_capture(ctx, SBW_IR_CNTRL_SIG_16BIT);
-    sbw_shift_dr16_no_capture(ctx, 0x0501);
-    sbw_shift_ir8_no_capture(ctx, SBW_IR_ADDR_CAPTURE);
-    sbw_shift_ir8_no_capture(ctx, SBW_IR_DATA_QUICK);
-    sbw_tclk_set(ctx, true);
-
-    for (size_t index = 0; index < word_count; ++index) {
-        sbw_tclk_set(ctx, false);
-        const uint16_t actual = sbw_shift_dr16_capture(ctx, 0x0000);
-        sbw_tclk_set(ctx, true);
-        const uint16_t expected = sbw_pattern_word(index);
-
-        if (actual != expected) {
-            if (result) {
-                result->mismatch_index = (uint32_t)index;
-                result->mismatch_expected = expected;
-                result->mismatch_actual = actual;
-            }
-            return false;
-        }
-    }
-
-    return true;
-}
-
 static mp_obj_t sbw_make_bool_u8(bool ok, uint8_t value) {
     mp_obj_t items[2] = {
         mp_obj_new_bool(ok),
@@ -988,28 +860,6 @@ static mp_obj_t sbw_make_bool_bytes(bool ok, const uint8_t *data, size_t len) {
         (ok && len != 0) ? mp_obj_new_bytes(data, len) : mp_const_empty_bytes,
     };
     return mp_obj_new_tuple(2, items);
-}
-
-static mp_obj_t sbw_make_fram_smoke_result(bool ok, const sbw_fram_smoke_result_t *result) {
-    mp_obj_t items[4] = {
-        mp_obj_new_bool(ok),
-        mp_obj_new_int_from_uint(result->original),
-        mp_obj_new_int_from_uint(result->test_readback),
-        mp_obj_new_int_from_uint(result->restored_readback),
-    };
-    return mp_obj_new_tuple(4, items);
-}
-
-static mp_obj_t sbw_make_fram_bench_result(bool ok, const sbw_fram_bench_result_t *result) {
-    mp_obj_t items[6] = {
-        mp_obj_new_bool(ok),
-        mp_obj_new_int_from_uint(result->write_cycles),
-        mp_obj_new_int_from_uint(result->verify_cycles),
-        mp_obj_new_int_from_uint(result->mismatch_index),
-        mp_obj_new_int_from_uint(result->mismatch_expected),
-        mp_obj_new_int_from_uint(result->mismatch_actual),
-    };
-    return mp_obj_new_tuple(6, items);
 }
 
 static mp_obj_t sbw_native_read_id(mp_obj_t hw_in) {
@@ -1135,11 +985,6 @@ static mp_obj_t sbw_native_read_block_common(mp_obj_t hw_in, mp_obj_t address_in
     return result;
 }
 
-static mp_obj_t sbw_native_read_mem16_quick(mp_obj_t hw_in, mp_obj_t address_in, mp_obj_t words_in) {
-    return sbw_native_read_block_common(hw_in, address_in, words_in);
-}
-static MP_DEFINE_CONST_FUN_OBJ_3(sbw_native_read_mem16_quick_obj, sbw_native_read_mem16_quick);
-
 static mp_obj_t sbw_native_read_block16(mp_obj_t hw_in, mp_obj_t address_in, mp_obj_t words_in) {
     return sbw_native_read_block_common(hw_in, address_in, words_in);
 }
@@ -1215,92 +1060,6 @@ static mp_obj_t sbw_native_write_block16(mp_obj_t hw_in, mp_obj_t address_in, mp
 }
 static MP_DEFINE_CONST_FUN_OBJ_3(sbw_native_write_block16_obj, sbw_native_write_block16);
 
-static mp_obj_t sbw_native_fram_smoke16(mp_obj_t hw_in, mp_obj_t address_in, mp_obj_t value_in) {
-    sbw_hw_desc_t hw;
-    sbw_ctx_t ctx;
-    const uint32_t address = (uint32_t)mp_obj_get_int_truncated(address_in);
-    const uint16_t value = (uint16_t)mp_obj_get_int_truncated(value_in);
-    sbw_fram_smoke_result_t result = {0};
-    bool ok = false;
-
-    sbw_parse_hw_desc(hw_in, &hw);
-    sbw_ctx_init(&ctx, &hw);
-
-    if (sbw_fram_protection_mask(address) == 0) {
-        return sbw_make_fram_smoke_result(false, &result);
-    }
-
-    for (uint32_t attempt = 0; attempt < SBW_JTAG_ATTEMPTS; ++attempt) {
-        sbw_begin_session(&ctx);
-        ok = sbw_prepare_cpu(&ctx, NULL) &&
-            sbw_read_mem16_internal(&ctx, address, &result.original) &&
-            sbw_write_target_word(&ctx, address, value) &&
-            sbw_read_mem16_internal(&ctx, address, &result.test_readback) &&
-            result.test_readback == value &&
-            sbw_write_target_word(&ctx, address, result.original) &&
-            sbw_read_mem16_internal(&ctx, address, &result.restored_readback) &&
-            result.restored_readback == result.original;
-        sbw_release(&ctx);
-        if (ok) {
-            break;
-        }
-    }
-
-    return sbw_make_fram_smoke_result(ok, &result);
-}
-static MP_DEFINE_CONST_FUN_OBJ_3(sbw_native_fram_smoke16_obj, sbw_native_fram_smoke16);
-
-static mp_obj_t sbw_native_fram_bench(mp_obj_t hw_in, mp_obj_t address_in, mp_obj_t words_in) {
-    sbw_hw_desc_t hw;
-    sbw_ctx_t ctx;
-    const uint32_t address = (uint32_t)mp_obj_get_int_truncated(address_in);
-    const size_t word_count = (size_t)mp_obj_get_int_truncated(words_in);
-    sbw_fram_bench_result_t result = {
-        .write_cycles = 0,
-        .verify_cycles = 0,
-        .mismatch_index = (uint32_t)word_count,
-        .mismatch_expected = 0,
-        .mismatch_actual = 0,
-    };
-    bool ok = false;
-
-    sbw_parse_hw_desc(hw_in, &hw);
-    sbw_ctx_init(&ctx, &hw);
-
-    if (!sbw_fram_range_allowed(address, word_count) || word_count == 0) {
-        return sbw_make_fram_bench_result(false, &result);
-    }
-
-    sbw_dwt_enable();
-
-    for (uint32_t attempt = 0; attempt < SBW_JTAG_ATTEMPTS; ++attempt) {
-        uint32_t start = sbw_dwt_now();
-        sbw_begin_session(&ctx);
-        const bool write_ok = sbw_prepare_cpu(&ctx, NULL) &&
-            sbw_write_block16_pattern_internal(&ctx, address, word_count);
-        sbw_release(&ctx);
-        result.write_cycles = sbw_dwt_now() - start;
-        result.mismatch_index = (uint32_t)word_count;
-        result.mismatch_expected = 0;
-        result.mismatch_actual = 0;
-
-        start = sbw_dwt_now();
-        sbw_begin_session(&ctx);
-        const bool verify_ok = sbw_prepare_cpu(&ctx, NULL) &&
-            sbw_verify_block16_quick_pattern_internal(&ctx, address, word_count, &result);
-        sbw_release(&ctx);
-        result.verify_cycles = sbw_dwt_now() - start;
-
-        if (write_ok && verify_ok) {
-            ok = true;
-            break;
-        }
-    }
-
-    return sbw_make_fram_bench_result(ok, &result);
-}
-static MP_DEFINE_CONST_FUN_OBJ_3(sbw_native_fram_bench_obj, sbw_native_fram_bench);
-
 mp_obj_t mpy_init(mp_obj_fun_bc_t *self, size_t n_args, size_t n_kw, mp_obj_t *args) {
     MP_DYNRUNTIME_INIT_ENTRY
 
@@ -1308,16 +1067,10 @@ mp_obj_t mpy_init(mp_obj_fun_bc_t *self, size_t n_args, size_t n_kw, mp_obj_t *a
     mp_store_global(MP_QSTR_bypass_test, MP_OBJ_FROM_PTR(&sbw_native_bypass_test_obj));
     mp_store_global(MP_QSTR_sync_and_por, MP_OBJ_FROM_PTR(&sbw_native_sync_and_por_obj));
     mp_store_global(MP_QSTR_read_mem16, MP_OBJ_FROM_PTR(&sbw_native_read_mem16_obj));
-    mp_store_global(MP_QSTR_read_mem16_quick, MP_OBJ_FROM_PTR(&sbw_native_read_mem16_quick_obj));
     mp_store_global(MP_QSTR_write_mem16, MP_OBJ_FROM_PTR(&sbw_native_write_mem16_obj));
     mp_store_global(MP_QSTR_read_block16, MP_OBJ_FROM_PTR(&sbw_native_read_block16_obj));
     mp_store_global(MP_QSTR_write_block16, MP_OBJ_FROM_PTR(&sbw_native_write_block16_obj));
-    mp_store_global(MP_QSTR_fram_smoke16, MP_OBJ_FROM_PTR(&sbw_native_fram_smoke16_obj));
-    mp_store_global(MP_QSTR_fram_bench, MP_OBJ_FROM_PTR(&sbw_native_fram_bench_obj));
     mp_store_global(MP_QSTR_SYS_CLK_HZ, mp_obj_new_int_from_uint(SBW_SYS_CLK_HZ));
-    mp_store_global(MP_QSTR_ID_EXPECTED, mp_obj_new_int_from_uint(SBW_JTAG_ID_EXPECTED));
-    mp_store_global(MP_QSTR_BYPASS_PATTERN, mp_obj_new_int_from_uint(SBW_BYPASS_SMOKE_PATTERN));
-    mp_store_global(MP_QSTR_BYPASS_EXPECTED, mp_obj_new_int_from_uint(SBW_BYPASS_SMOKE_EXPECTED));
 
     MP_DYNRUNTIME_INIT_EXIT
 }

@@ -1,4 +1,6 @@
 from sbw import SBWNative, format_bypass, format_status, format_sync
+from sbw_config import bytes_to_words_le
+from testsuite import bench_block_roundtrip
 
 
 def _parse_u32(token):
@@ -16,7 +18,7 @@ def _print_help():
     print("  bypass-test")
     print("  sync-por")
     print("  read-mem16 <addr>")
-    print("  quick-read16 <addr> <words>")
+    print("  read-block16 <addr> <words>")
     print("  write-read-mem16 <addr> <value>")
     print("  fram-smoke16 <addr> <value>")
     print("  fram-bench <addr> <words>")
@@ -91,16 +93,16 @@ def repl():
                     address = _parse_u32(argv[1])
                     ok, value = sbw.read_mem16(address)
                     print("mem[0x%05X]=0x%04X %s" % (address & 0xFFFFF, value, "(read)" if ok else "(unexpected)"))
-            elif cmd == "quick-read16":
+            elif cmd == "read-block16":
                 if len(argv) != 3:
-                    print("usage: quick-read16 <addr> <words>")
+                    print("usage: read-block16 <addr> <words>")
                 elif _require_power(sbw):
                     address = _parse_u32(argv[1])
                     words = _parse_u32(argv[2])
-                    ok, values = sbw.read_mem16_quick(address, words)
-                    print("quick-read16 addr=0x%05X words=%d %s" % (address & 0xFFFFF, words, "(read)" if ok else "(unexpected)"))
+                    ok, payload = sbw.read_block16(address, words)
+                    print("read-block16 addr=0x%05X words=%d %s" % (address & 0xFFFFF, words, "(read)" if ok else "(unexpected)"))
                     if ok:
-                        for index, value in enumerate(values):
+                        for index, value in enumerate(bytes_to_words_le(payload)):
                             print("  [%d] = 0x%04X" % (index, value))
             elif cmd == "write-read-mem16":
                 if len(argv) != 3:
@@ -136,27 +138,27 @@ def repl():
                 elif _require_power(sbw):
                     address = _parse_u32(argv[1])
                     words = _parse_u32(argv[2])
-                    ok, result = sbw.fram_bench(address, words)
-                    word_count, write_us, verify_us, mismatch_index, mismatch_expected, mismatch_actual = result
+                    ok, result = bench_block_roundtrip(sbw, address, words)
+                    word_count, write1_us, read1_us, write2_us, read2_us = result
                     bytes_total = word_count * 2
-                    write_kib = (bytes_total * 1_000_000) // (write_us * 1024) if write_us else 0
-                    verify_kib = (bytes_total * 1_000_000) // (verify_us * 1024) if verify_us else 0
-                    print("fram-bench addr=0x%05X words=%d bytes=%d write=%dus (%d KiB/s) verify=%dus (%d KiB/s) %s" % (
+                    write1_kib = (bytes_total * 1_000_000) // (write1_us * 1024) if write1_us else 0
+                    read1_kib = (bytes_total * 1_000_000) // (read1_us * 1024) if read1_us else 0
+                    write2_kib = (bytes_total * 1_000_000) // (write2_us * 1024) if write2_us else 0
+                    read2_kib = (bytes_total * 1_000_000) // (read2_us * 1024) if read2_us else 0
+                    print("fram-bench addr=0x%05X words=%d bytes=%d write1=%dus (%d KiB/s) read1=%dus (%d KiB/s) write2=%dus (%d KiB/s) read2=%dus (%d KiB/s) %s" % (
                         address & 0xFFFFF,
                         word_count,
                         bytes_total,
-                        write_us,
-                        write_kib,
-                        verify_us,
-                        verify_kib,
+                        write1_us,
+                        write1_kib,
+                        read1_us,
+                        read1_kib,
+                        write2_us,
+                        write2_kib,
+                        read2_us,
+                        read2_kib,
                         "(verified)" if ok else "(unexpected)",
                     ))
-                    if not ok and mismatch_index < word_count:
-                        print("mismatch index=%d expected=0x%04X actual=0x%04X" % (
-                            mismatch_index,
-                            mismatch_expected,
-                            mismatch_actual,
-                        ))
             else:
                 print("unknown command: %s" % cmd)
         except Exception as exc:

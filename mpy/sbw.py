@@ -15,8 +15,6 @@ from sbw_config import (
     GPIO_OUT_SET_ADDR,
     POWER_MASK,
     SBW_TARGET_POWER_SETTLE_MS,
-    bytes_to_words_le,
-    cycles_to_us,
     ensure_system_clock,
 )
 
@@ -92,10 +90,6 @@ class SBWNative:
     def read_mem16(self, address):
         return sbw_native.read_mem16(self.hw, address)
 
-    def read_mem16_quick(self, address, words):
-        ok, data = sbw_native.read_mem16_quick(self.hw, address, words)
-        return ok, bytes_to_words_le(data)
-
     def write_mem16(self, address, value):
         return sbw_native.write_mem16(self.hw, address, value)
 
@@ -109,20 +103,19 @@ class SBWNative:
         return bool(sbw_native.write_block16(self.hw, address, data))
 
     def fram_smoke16(self, address, value):
-        return sbw_native.fram_smoke16(self.hw, address, value)
+        ok, original = self.read_mem16(address)
+        if not ok:
+            return False, 0, 0, 0
 
-    def fram_bench(self, address, words):
-        ok, write_cycles, verify_cycles, mismatch_index, mismatch_expected, mismatch_actual = (
-            sbw_native.fram_bench(self.hw, address, words)
-        )
-        return ok, (
-            words,
-            cycles_to_us(write_cycles),
-            cycles_to_us(verify_cycles),
-            mismatch_index,
-            mismatch_expected,
-            mismatch_actual,
-        )
+        ok, test_readback = self.write_mem16(address, value)
+        if not ok or test_readback != (value & 0xFFFF):
+            return False, original, test_readback, 0
+
+        ok, restored_readback = self.write_mem16(address, original)
+        if not ok or restored_readback != original:
+            return False, original, test_readback, restored_readback
+
+        return True, original, test_readback, restored_readback
 
 
 def format_status(status):

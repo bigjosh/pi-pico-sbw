@@ -24,18 +24,22 @@ Latest verified hardware results on the wired target:
 - `read-mem16 0xfffc` -> `0xEE44`
 - `read-block16 0xfffc 2` -> `0xEE44, 0xEDC8`
 - RAM write/readback passes at `0x2000` and `0x2002`
-- FRAM smoke write/read/restore passes at `0xC400`
-- `fram-bench` for `10,240` bytes returned `134,647 us` write and `135,167 us` verify
+- Python FRAM smoke write/read/restore passes at `0xC400`
+- Python round-trip `fram-bench` for `10,240` bytes returned:
+  - `write1=135,506 us`
+  - `read1=136,416 us`
+  - `write2=135,392 us`
+  - `read2=136,275 us`
 
 That is about:
 
 - `74 KiB/s` write throughput
-- `74 KiB/s` verify throughput
+- `73 KiB/s` readback throughput
 
 ## Repo Layout
 
 - [mpy/native/sbw_native.c](D:/Github/pi-pico-sbw/mpy/native/sbw_native.c)
-  Native MicroPython module. Owns the `SBW` transport, `JTAG` sequencing, memory read/write, FRAM smoke, and FRAM benchmark.
+  Native MicroPython module. Owns the `SBW` transport, `JTAG` sequencing, and memory read/write primitives. It does not own benchmark policy, smoke-test policy, or timing.
 - [mpy/sbw_config.py](D:/Github/pi-pico-sbw/mpy/sbw_config.py)
   Hardware constants, `RP2350` `SIO` MMIO addresses, regression constants, and the `150 MHz` clock setup/verification logic.
 - [mpy/sbw.py](D:/Github/pi-pico-sbw/mpy/sbw.py)
@@ -43,7 +47,7 @@ That is about:
 - [mpy/main.py](D:/Github/pi-pico-sbw/mpy/main.py)
   Interactive shell for bench use.
 - [mpy/testsuite.py](D:/Github/pi-pico-sbw/mpy/testsuite.py)
-  Regression and benchmark entry points.
+  Regression and Python-side benchmark entry points.
 - [mpy/README.md](D:/Github/pi-pico-sbw/mpy/README.md)
   MicroPython build and deployment notes.
 - [tools/build-mpy-native.ps1](D:/Github/pi-pico-sbw/tools/build-mpy-native.ps1)
@@ -67,9 +71,33 @@ Important constraints:
 
 ## Clock Requirement
 
-The native module assumes a `150 MHz` system clock.
+The native module is compiled against a fixed maximum system clock of `150 MHz`.
 
-At `SBWNative()` startup, the Python wrapper calls `machine.freq(150000000)`, reads the actual clock back, and raises if the board did not take that setting.
+The important rule is:
+
+- actual `clk_sys` must be `<= sbw_native.SYS_CLK_HZ`
+
+If the MCU is clocked faster than the compile-time assumption, the native busy-wait loops become too short in real time and `SBW` pulse widths may violate protocol minimums. A slower clock is safe for protocol timing, but will reduce throughput.
+
+The caller is responsible for enforcing that precondition before using the native API. The current `SBWNative()` wrapper does this conservatively by attempting to set the clock to `150 MHz` and verifying the result.
+
+Example for low-level callers:
+
+```python
+import machine
+import sbw_native
+
+target_hz = sbw_native.SYS_CLK_HZ
+machine.freq(target_hz)
+
+actual = machine.freq()
+if isinstance(actual, tuple):
+    actual = actual[0]
+actual = int(actual)
+
+if actual > target_hz:
+    raise RuntimeError("clk_sys too fast for sbw_native: %d > %d" % (actual, target_hz))
+```
 
 ## Build And Deploy
 
