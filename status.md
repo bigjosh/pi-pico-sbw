@@ -3,7 +3,7 @@
 ## Snapshot
 
 - Branch: `codex/python-base-c-jtag`
-- Last committed base: `95c4f0e`
+- Last committed base: `4f893db`
 - Current repo direction: MicroPython orchestration + native C `.mpy` JTAG engine
 - Older Pico SDK firmware path and abandoned `PIO` handoff material have been removed from the repo
 
@@ -32,11 +32,11 @@ Important runtime requirement:
 Latest verified results:
 
 - `testsuite.run_regression()` -> `True`
-- `testsuite.run_bench()` -> `(True, (5120, 1286720, 237887, 5120, 0, 0))`
-- That is `10,240` bytes in `1,286,720 us` write and `237,887 us` verify
+- `testsuite.run_bench()` -> `(True, (5120, 671727, 142313, 5120, 0, 0))`
+- That is `10,240` bytes in `671,727 us` write and `142,313 us` verify
 - Approximate throughput:
-  - write: `7 KiB/s`
-  - verify: `42 KiB/s`
+  - write: `15 KiB/s`
+  - verify: `71 KiB/s`
 
 ## Current File Map
 

@@ -24,12 +24,12 @@ Latest verified hardware results on the wired target:
 - `read-mem16 0xfffc` -> `0xEE44`
 - RAM write/readback passes at `0x2000` and `0x2002`
 - FRAM smoke write/read/restore passes at `0xC400`
-- `fram-bench` for `10,240` bytes returned `1,286,720 us` write and `237,887 us` verify
+- `fram-bench` for `10,240` bytes returned `671,727 us` write and `142,313 us` verify
 
 That is about:
 
-- `7 KiB/s` write throughput
-- `42 KiB/s` verify throughput
+- `15 KiB/s` write throughput
+- `71 KiB/s` verify throughput
 
 ## Repo Layout
 

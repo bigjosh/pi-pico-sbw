@@ -32,7 +32,6 @@ HW_TUPLE_LAYOUT = (
     "gpio_oe_clr_addr",
     "clock_mask",
     "data_mask",
-    "power_mask",
 )
 
 DEFAULT_HW = (
@@ -43,7 +42,6 @@ DEFAULT_HW = (
     GPIO_OE_CLR_ADDR,
     CLOCK_MASK,
     DATA_MASK,
-    POWER_MASK,
 )
 
 REGRESSION_READ_ADDR_0 = const(0xFFFE)

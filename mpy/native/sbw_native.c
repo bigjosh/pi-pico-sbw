@@ -71,13 +71,10 @@ typedef struct {
     volatile uint32_t *gpio_oe_clr;
     uint32_t clock_mask;
     uint32_t data_mask;
-    uint32_t power_mask;
 } sbw_hw_desc_t;
 
 typedef struct {
     sbw_hw_desc_t hw;
-    bool data_is_driving;
-    bool clock_is_high;
     bool tclk_high;
 } sbw_ctx_t;
 
@@ -109,22 +106,19 @@ static inline void sbw_wait_cycles(uint32_t cycles) {
         : "cc", "memory");
 }
 
-static inline uint32_t sbw_irq_save(void) {
-    uint32_t primask;
+static inline void sbw_irq_disable(void) {
     __asm__ volatile (
-        "mrs %0, primask\n"
         "cpsid i\n"
-        : "=r"(primask)
+        :
         :
         : "memory");
-    return primask;
 }
 
-static inline void sbw_irq_restore(uint32_t primask) {
+static inline void sbw_irq_enable(void) {
     __asm__ volatile (
-        "msr primask, %0\n"
+        "cpsie i\n"
         :
-        : "r"(primask)
+        :
         : "memory");
 }
 
@@ -156,8 +150,8 @@ static void sbw_parse_hw_desc(mp_obj_t hw_in, sbw_hw_desc_t *hw) {
     size_t len = 0;
     mp_obj_t *items = NULL;
     mp_obj_get_array(hw_in, &len, &items);
-    if (len != 8) {
-        mp_raise_ValueError("hw tuple must have 8 items");
+    if (len != 7) {
+        mp_raise_ValueError("hw tuple must have 7 items");
     }
 
     hw->gpio_in = sbw_mmio_ptr((uint32_t)mp_obj_get_int_truncated(items[0]));
@@ -167,17 +161,14 @@ static void sbw_parse_hw_desc(mp_obj_t hw_in, sbw_hw_desc_t *hw) {
     hw->gpio_oe_clr = sbw_mmio_ptr((uint32_t)mp_obj_get_int_truncated(items[4]));
     hw->clock_mask = (uint32_t)mp_obj_get_int_truncated(items[5]);
     hw->data_mask = (uint32_t)mp_obj_get_int_truncated(items[6]);
-    hw->power_mask = (uint32_t)mp_obj_get_int_truncated(items[7]);
 
-    if (hw->clock_mask == 0 || hw->data_mask == 0 || hw->power_mask == 0) {
+    if (hw->clock_mask == 0 || hw->data_mask == 0) {
         mp_raise_ValueError("hw masks must be non-zero");
     }
 }
 
 static void sbw_ctx_init(sbw_ctx_t *ctx, const sbw_hw_desc_t *hw) {
     ctx->hw = *hw;
-    ctx->data_is_driving = false;
-    ctx->clock_is_high = false;
     ctx->tclk_high = true;
 
     sbw_mmio_write(ctx->hw.gpio_oe_set, ctx->hw.clock_mask);
@@ -191,7 +182,6 @@ static inline void sbw_clock_drive(sbw_ctx_t *ctx, bool high) {
     } else {
         sbw_mmio_write(ctx->hw.gpio_out_clr, ctx->hw.clock_mask);
     }
-    ctx->clock_is_high = high;
 }
 
 static inline void sbw_data_drive(sbw_ctx_t *ctx, bool level) {
@@ -200,72 +190,35 @@ static inline void sbw_data_drive(sbw_ctx_t *ctx, bool level) {
     } else {
         sbw_mmio_write(ctx->hw.gpio_out_clr, ctx->hw.data_mask);
     }
-
-    if (!ctx->data_is_driving) {
-        sbw_mmio_write(ctx->hw.gpio_oe_set, ctx->hw.data_mask);
-        ctx->data_is_driving = true;
-    }
 }
 
-static inline void sbw_data_release(sbw_ctx_t *ctx) {
-    if (ctx->data_is_driving) {
-        sbw_mmio_write(ctx->hw.gpio_oe_clr, ctx->hw.data_mask);
-        ctx->data_is_driving = false;
-    }
+static inline void sbw_data_release_now(sbw_ctx_t *ctx) {
+    sbw_mmio_write(ctx->hw.gpio_oe_clr, ctx->hw.data_mask);
 }
 
 static inline bool sbw_data_read(const sbw_ctx_t *ctx) {
     return (sbw_mmio_read(ctx->hw.gpio_in) & ctx->hw.data_mask) != 0;
 }
 
-static inline uint32_t sbw_low_phase_begin(sbw_ctx_t *ctx) {
-    const uint32_t irq_state = sbw_irq_save();
+static inline void sbw_low_phase_begin(sbw_ctx_t *ctx) {
+    sbw_irq_disable();
     sbw_clock_drive(ctx, false);
-    return irq_state;
 }
 
-static inline void sbw_low_phase_end(sbw_ctx_t *ctx, uint32_t irq_state) {
+static inline void sbw_low_phase_end(sbw_ctx_t *ctx) {
     sbw_clock_drive(ctx, true);
-    sbw_irq_restore(irq_state);
+    sbw_irq_enable();
 }
 
 static inline void sbw_pulse_low_cycles(sbw_ctx_t *ctx, uint32_t low_cycles) {
-    const uint32_t irq_state = sbw_low_phase_begin(ctx);
+    sbw_low_phase_begin(ctx);
     sbw_wait_cycles(low_cycles);
-    sbw_low_phase_end(ctx, irq_state);
-}
-
-static inline void sbw_slot_drive(sbw_ctx_t *ctx, bool level) {
-    sbw_data_drive(ctx, level);
-    sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
-    sbw_pulse_low_cycles(ctx, SBW_ACTIVE_SLOT_LOW_CYCLES);
-}
-
-static inline void sbw_slot_tmsldh(sbw_ctx_t *ctx) {
-    sbw_data_drive(ctx, false);
-    sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
-
-    const uint32_t irq_state = sbw_low_phase_begin(ctx);
-    sbw_wait_cycles(SBW_TMSLDH_LOW_BEFORE_DRIVE_CYCLES);
-    sbw_data_drive(ctx, true);
-    sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES - SBW_TMSLDH_LOW_BEFORE_DRIVE_CYCLES);
-    sbw_low_phase_end(ctx, irq_state);
-}
-
-static inline bool sbw_slot_tdo(sbw_ctx_t *ctx, bool sample) {
-    sbw_data_release(ctx);
-    sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
-
-    const uint32_t irq_state = sbw_low_phase_begin(ctx);
-    sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES);
-    const bool tdo = sample ? sbw_data_read(ctx) : false;
-    sbw_low_phase_end(ctx, irq_state);
-    return tdo;
+    sbw_low_phase_end(ctx);
 }
 
 static void sbw_release(sbw_ctx_t *ctx) {
     ctx->tclk_high = true;
-    sbw_data_release(ctx);
+    sbw_data_release_now(ctx);
     sbw_clock_drive(ctx, false);
     sbw_wait_cycles(SBW_EXIT_HOLD_CYCLES);
 }
@@ -274,6 +227,7 @@ static void sbw_entry_rst_high(sbw_ctx_t *ctx) {
     sbw_clock_drive(ctx, false);
     sbw_wait_cycles(SBW_ENTRY_RST_HIGH_TEST_RESET_CYCLES);
 
+    sbw_mmio_write(ctx->hw.gpio_oe_set, ctx->hw.data_mask);
     sbw_data_drive(ctx, true);
     sbw_clock_drive(ctx, true);
     sbw_wait_cycles(SBW_ENTRY_RST_HIGH_TEST_ENABLE_CYCLES);
@@ -289,6 +243,7 @@ static void sbw_entry_rst_low(sbw_ctx_t *ctx) {
     sbw_clock_drive(ctx, false);
     sbw_wait_cycles(SBW_ENTRY_RST_LOW_TEST_RESET_CYCLES);
 
+    sbw_mmio_write(ctx->hw.gpio_oe_set, ctx->hw.data_mask);
     sbw_data_drive(ctx, false);
     sbw_wait_cycles(SBW_ENTRY_RST_LOW_HOLD_RESET_CYCLES);
 
@@ -313,20 +268,91 @@ static void sbw_start_mode(sbw_ctx_t *ctx, bool rst_low) {
 }
 
 static inline bool sbw_io_bit(sbw_ctx_t *ctx, bool tms, bool tdi) {
-    sbw_slot_drive(ctx, tms);
-    sbw_slot_drive(ctx, tdi);
-    return sbw_slot_tdo(ctx, true);
+    volatile uint32_t *const gpio_in = ctx->hw.gpio_in;
+    volatile uint32_t *const gpio_out_set = ctx->hw.gpio_out_set;
+    volatile uint32_t *const gpio_out_clr = ctx->hw.gpio_out_clr;
+    volatile uint32_t *const gpio_oe_set = ctx->hw.gpio_oe_set;
+    volatile uint32_t *const gpio_oe_clr = ctx->hw.gpio_oe_clr;
+    const uint32_t clock_mask = ctx->hw.clock_mask;
+    const uint32_t data_mask = ctx->hw.data_mask;
+
+    // One logical SBW bit is three clocked sub-slots on SBWTDIO: drive TMS, drive TDI, then
+    // release the line so the target can return TDO on the third low pulse.
+    // Slot 1: present TMS while we still own SBWTDIO.
+    sbw_mmio_write(tms ? gpio_out_set : gpio_out_clr, data_mask);
+    sbw_mmio_write(gpio_oe_set, data_mask);
+    sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
+    sbw_irq_disable();
+    sbw_mmio_write(gpio_out_clr, clock_mask);
+    sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES);
+    sbw_mmio_write(gpio_out_set, clock_mask);
+    sbw_irq_enable();
+
+    // Slot 2: present TDI. In Run-Test/Idle this slot also carries TCLK state.
+    sbw_mmio_write(tdi ? gpio_out_set : gpio_out_clr, data_mask);
+    sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
+    sbw_irq_disable();
+    sbw_mmio_write(gpio_out_clr, clock_mask);
+    sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES);
+    sbw_mmio_write(gpio_out_set, clock_mask);
+    sbw_irq_enable();
+
+    // Slot 3: release SBWTDIO before the falling edge so the target can drive TDO.
+    sbw_mmio_write(gpio_oe_clr, data_mask);
+    sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
+    sbw_irq_disable();
+    sbw_mmio_write(gpio_out_clr, clock_mask);
+    sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES);
+    const bool tdo = (sbw_mmio_read(gpio_in) & data_mask) != 0;
+    sbw_mmio_write(gpio_out_set, clock_mask);
+    sbw_irq_enable();
+    return tdo;
 }
 
 static inline void sbw_tclk_set(sbw_ctx_t *ctx, bool high) {
+    volatile uint32_t *const gpio_out_set = ctx->hw.gpio_out_set;
+    volatile uint32_t *const gpio_out_clr = ctx->hw.gpio_out_clr;
+    volatile uint32_t *const gpio_oe_set = ctx->hw.gpio_oe_set;
+    volatile uint32_t *const gpio_oe_clr = ctx->hw.gpio_oe_clr;
+    const uint32_t clock_mask = ctx->hw.clock_mask;
+    const uint32_t data_mask = ctx->hw.data_mask;
+
+    sbw_mmio_write(gpio_oe_set, data_mask);
     if (ctx->tclk_high) {
-        sbw_slot_tmsldh(ctx);
+        sbw_mmio_write(gpio_out_clr, data_mask);
+        sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
+        sbw_irq_disable();
+        sbw_mmio_write(gpio_out_clr, clock_mask);
+        sbw_wait_cycles(SBW_TMSLDH_LOW_BEFORE_DRIVE_CYCLES);
+        sbw_mmio_write(gpio_out_set, data_mask);
+        sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES - SBW_TMSLDH_LOW_BEFORE_DRIVE_CYCLES);
+        sbw_mmio_write(gpio_out_set, clock_mask);
+        sbw_irq_enable();
     } else {
-        sbw_slot_drive(ctx, false);
+        sbw_mmio_write(gpio_out_clr, data_mask);
+        sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
+        sbw_irq_disable();
+        sbw_mmio_write(gpio_out_clr, clock_mask);
+        sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES);
+        sbw_mmio_write(gpio_out_set, clock_mask);
+        sbw_irq_enable();
     }
 
-    sbw_slot_drive(ctx, high);
-    (void)sbw_slot_tdo(ctx, false);
+    sbw_mmio_write(high ? gpio_out_set : gpio_out_clr, data_mask);
+    sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
+    sbw_irq_disable();
+    sbw_mmio_write(gpio_out_clr, clock_mask);
+    sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES);
+    sbw_mmio_write(gpio_out_set, clock_mask);
+    sbw_irq_enable();
+
+    sbw_mmio_write(gpio_oe_clr, data_mask);
+    sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
+    sbw_irq_disable();
+    sbw_mmio_write(gpio_out_clr, clock_mask);
+    sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES);
+    sbw_mmio_write(gpio_out_set, clock_mask);
+    sbw_irq_enable();
     ctx->tclk_high = high;
 }
 
@@ -362,15 +388,28 @@ static inline void sbw_finish_shift(sbw_ctx_t *ctx) {
     sbw_io_bit(ctx, false, ctx->tclk_high);
 }
 
-static uint8_t sbw_shift_ir8(sbw_ctx_t *ctx, uint8_t instruction) {
+static void sbw_shift_ir8_no_capture(sbw_ctx_t *ctx, uint8_t instruction) {
+    uint8_t shift = instruction;
+
+    sbw_go_to_shift_ir(ctx);
+
+    for (uint32_t bit = 0; bit < 7; ++bit) {
+        sbw_io_bit(ctx, false, (shift & 0x1u) != 0);
+        shift >>= 1;
+    }
+
+    sbw_io_bit(ctx, true, (shift & 0x1u) != 0);
+    sbw_finish_shift(ctx);
+}
+
+static uint8_t sbw_shift_ir8_capture(sbw_ctx_t *ctx, uint8_t instruction) {
     uint8_t captured = 0;
     uint8_t shift = instruction;
 
     sbw_go_to_shift_ir(ctx);
 
     for (uint32_t bit = 0; bit < 7; ++bit) {
-        const bool tdi = (shift & 0x1u) != 0;
-        captured = (uint8_t)((captured << 1) | (sbw_io_bit(ctx, false, tdi) ? 1u : 0u));
+        captured = (uint8_t)((captured << 1) | (sbw_io_bit(ctx, false, (shift & 0x1u) != 0) ? 1u : 0u));
         shift >>= 1;
     }
 
@@ -379,7 +418,21 @@ static uint8_t sbw_shift_ir8(sbw_ctx_t *ctx, uint8_t instruction) {
     return captured;
 }
 
-static uint16_t sbw_shift_dr16(sbw_ctx_t *ctx, uint16_t data) {
+static void sbw_shift_dr16_no_capture(sbw_ctx_t *ctx, uint16_t data) {
+    uint16_t shift = data;
+
+    sbw_go_to_shift_dr(ctx);
+
+    for (uint32_t bit = 0; bit < 15; ++bit) {
+        sbw_io_bit(ctx, false, (shift & 0x8000u) != 0);
+        shift <<= 1;
+    }
+
+    sbw_io_bit(ctx, true, (shift & 0x8000u) != 0);
+    sbw_finish_shift(ctx);
+}
+
+static uint16_t sbw_shift_dr16_capture(sbw_ctx_t *ctx, uint16_t data) {
     uint16_t captured = 0;
     uint16_t shift = data;
 
@@ -396,26 +449,23 @@ static uint16_t sbw_shift_dr16(sbw_ctx_t *ctx, uint16_t data) {
     return captured;
 }
 
-static uint32_t sbw_shift_dr20(sbw_ctx_t *ctx, uint32_t data) {
-    uint32_t captured = 0;
+static void sbw_shift_dr20_no_capture(sbw_ctx_t *ctx, uint32_t data) {
     uint32_t shift = data & 0x000FFFFFu;
 
     sbw_go_to_shift_dr(ctx);
 
     for (uint32_t bit = 0; bit < 19; ++bit) {
-        const bool tdi = (shift & 0x00080000u) != 0;
-        captured = (captured << 1) | (sbw_io_bit(ctx, false, tdi) ? 1u : 0u);
+        sbw_io_bit(ctx, false, (shift & 0x00080000u) != 0);
         shift <<= 1;
     }
 
-    captured = (captured << 1) | (sbw_io_bit(ctx, true, (shift & 0x00080000u) != 0) ? 1u : 0u);
+    sbw_io_bit(ctx, true, (shift & 0x00080000u) != 0);
     sbw_finish_shift(ctx);
-    return captured & 0x000FFFFFu;
 }
 
 static uint16_t sbw_read_control_signal(sbw_ctx_t *ctx) {
-    (void)sbw_shift_ir8(ctx, SBW_IR_CNTRL_SIG_CAPTURE);
-    return sbw_shift_dr16(ctx, 0x0000);
+    sbw_shift_ir8_no_capture(ctx, SBW_IR_CNTRL_SIG_CAPTURE);
+    return sbw_shift_dr16_capture(ctx, 0x0000);
 }
 
 static bool sbw_in_full_emulation(sbw_ctx_t *ctx, uint16_t *control_capture) {
@@ -427,15 +477,15 @@ static bool sbw_in_full_emulation(sbw_ctx_t *ctx, uint16_t *control_capture) {
 }
 
 static bool sbw_sync_cpu(sbw_ctx_t *ctx) {
-    (void)sbw_shift_ir8(ctx, SBW_IR_CNTRL_SIG_16BIT);
-    (void)sbw_shift_dr16(ctx, 0x1501);
+    sbw_shift_ir8_no_capture(ctx, SBW_IR_CNTRL_SIG_16BIT);
+    sbw_shift_dr16_no_capture(ctx, 0x1501);
 
-    if (sbw_shift_ir8(ctx, SBW_IR_CNTRL_SIG_CAPTURE) != SBW_JTAG_ID_EXPECTED) {
+    if (sbw_shift_ir8_capture(ctx, SBW_IR_CNTRL_SIG_CAPTURE) != SBW_JTAG_ID_EXPECTED) {
         return false;
     }
 
     for (uint32_t attempt = 0; attempt < SBW_JTAG_SYNC_RETRIES; ++attempt) {
-        if ((sbw_shift_dr16(ctx, 0x0000) & SBW_JTAG_SYNC_MASK) != 0) {
+        if ((sbw_shift_dr16_capture(ctx, 0x0000) & SBW_JTAG_SYNC_MASK) != 0) {
             return true;
         }
     }
@@ -447,34 +497,34 @@ static bool sbw_execute_por(sbw_ctx_t *ctx, uint16_t *control_capture) {
     sbw_tclk_set(ctx, false);
     sbw_tclk_set(ctx, true);
 
-    (void)sbw_shift_ir8(ctx, SBW_IR_CNTRL_SIG_16BIT);
-    (void)sbw_shift_dr16(ctx, 0x0C01);
-    (void)sbw_shift_dr16(ctx, 0x0401);
+    sbw_shift_ir8_no_capture(ctx, SBW_IR_CNTRL_SIG_16BIT);
+    sbw_shift_dr16_no_capture(ctx, 0x0C01);
+    sbw_shift_dr16_no_capture(ctx, 0x0401);
 
-    (void)sbw_shift_ir8(ctx, SBW_IR_DATA_16BIT);
+    sbw_shift_ir8_no_capture(ctx, SBW_IR_DATA_16BIT);
     sbw_tclk_set(ctx, false);
     sbw_tclk_set(ctx, true);
     sbw_tclk_set(ctx, false);
     sbw_tclk_set(ctx, true);
-    (void)sbw_shift_dr16(ctx, SBW_SAFE_FRAM_PC);
+    sbw_shift_dr16_no_capture(ctx, SBW_SAFE_FRAM_PC);
 
     sbw_tclk_set(ctx, false);
     sbw_tclk_set(ctx, true);
 
-    (void)sbw_shift_ir8(ctx, SBW_IR_DATA_CAPTURE);
+    sbw_shift_ir8_no_capture(ctx, SBW_IR_DATA_CAPTURE);
 
     sbw_tclk_set(ctx, false);
     sbw_tclk_set(ctx, true);
     sbw_tclk_set(ctx, false);
     sbw_tclk_set(ctx, true);
 
-    (void)sbw_shift_ir8(ctx, SBW_IR_CNTRL_SIG_16BIT);
-    (void)sbw_shift_dr16(ctx, 0x0501);
+    sbw_shift_ir8_no_capture(ctx, SBW_IR_CNTRL_SIG_16BIT);
+    sbw_shift_dr16_no_capture(ctx, 0x0501);
     sbw_tclk_set(ctx, false);
     sbw_tclk_set(ctx, true);
 
-    (void)sbw_shift_ir8(ctx, SBW_IR_CNTRL_SIG_CAPTURE);
-    const uint16_t status = sbw_shift_dr16(ctx, 0x0000);
+    sbw_shift_ir8_no_capture(ctx, SBW_IR_CNTRL_SIG_CAPTURE);
+    const uint16_t status = sbw_shift_dr16_capture(ctx, 0x0000);
     if (control_capture) {
         *control_capture = status;
     }
@@ -483,18 +533,18 @@ static bool sbw_execute_por(sbw_ctx_t *ctx, uint16_t *control_capture) {
 
 static void sbw_write_mem16_sequence(sbw_ctx_t *ctx, uint32_t address, uint16_t data) {
     sbw_tclk_set(ctx, false);
-    (void)sbw_shift_ir8(ctx, SBW_IR_CNTRL_SIG_16BIT);
-    (void)sbw_shift_dr16(ctx, 0x0500);
-    (void)sbw_shift_ir8(ctx, SBW_IR_ADDR_16BIT);
-    (void)sbw_shift_dr20(ctx, address & 0x000FFFFFu);
+    sbw_shift_ir8_no_capture(ctx, SBW_IR_CNTRL_SIG_16BIT);
+    sbw_shift_dr16_no_capture(ctx, 0x0500);
+    sbw_shift_ir8_no_capture(ctx, SBW_IR_ADDR_16BIT);
+    sbw_shift_dr20_no_capture(ctx, address & 0x000FFFFFu);
 
     sbw_tclk_set(ctx, true);
-    (void)sbw_shift_ir8(ctx, SBW_IR_DATA_TO_ADDR);
-    (void)sbw_shift_dr16(ctx, data);
+    sbw_shift_ir8_no_capture(ctx, SBW_IR_DATA_TO_ADDR);
+    sbw_shift_dr16_no_capture(ctx, data);
 
     sbw_tclk_set(ctx, false);
-    (void)sbw_shift_ir8(ctx, SBW_IR_CNTRL_SIG_16BIT);
-    (void)sbw_shift_dr16(ctx, 0x0501);
+    sbw_shift_ir8_no_capture(ctx, SBW_IR_CNTRL_SIG_16BIT);
+    sbw_shift_dr16_no_capture(ctx, 0x0501);
     sbw_tclk_set(ctx, true);
     sbw_tclk_set(ctx, false);
     sbw_tclk_set(ctx, true);
@@ -520,26 +570,26 @@ static bool sbw_set_pc_430xv2(sbw_ctx_t *ctx, uint32_t address) {
     }
 
     sbw_tclk_set(ctx, false);
-    (void)sbw_shift_ir8(ctx, SBW_IR_DATA_16BIT);
+    sbw_shift_ir8_no_capture(ctx, SBW_IR_DATA_16BIT);
     sbw_tclk_set(ctx, true);
-    (void)sbw_shift_dr16(ctx, mova_imm20_pc);
+    sbw_shift_dr16_no_capture(ctx, mova_imm20_pc);
 
     sbw_tclk_set(ctx, false);
-    (void)sbw_shift_ir8(ctx, SBW_IR_CNTRL_SIG_16BIT);
-    (void)sbw_shift_dr16(ctx, 0x1400);
+    sbw_shift_ir8_no_capture(ctx, SBW_IR_CNTRL_SIG_16BIT);
+    sbw_shift_dr16_no_capture(ctx, 0x1400);
 
-    (void)sbw_shift_ir8(ctx, SBW_IR_DATA_16BIT);
-    sbw_tclk_set(ctx, false);
-    sbw_tclk_set(ctx, true);
-    (void)sbw_shift_dr16(ctx, (uint16_t)pc);
-
+    sbw_shift_ir8_no_capture(ctx, SBW_IR_DATA_16BIT);
     sbw_tclk_set(ctx, false);
     sbw_tclk_set(ctx, true);
-    (void)sbw_shift_dr16(ctx, SBW_NOP);
+    sbw_shift_dr16_no_capture(ctx, (uint16_t)pc);
 
     sbw_tclk_set(ctx, false);
-    (void)sbw_shift_ir8(ctx, SBW_IR_ADDR_CAPTURE);
-    (void)sbw_shift_dr20(ctx, 0x00000);
+    sbw_tclk_set(ctx, true);
+    sbw_shift_dr16_no_capture(ctx, SBW_NOP);
+
+    sbw_tclk_set(ctx, false);
+    sbw_shift_ir8_no_capture(ctx, SBW_IR_ADDR_CAPTURE);
+    sbw_shift_dr20_no_capture(ctx, 0x00000);
     return true;
 }
 
@@ -669,15 +719,15 @@ static bool sbw_read_mem16_internal(sbw_ctx_t *ctx, uint32_t address, uint16_t *
     }
 
     sbw_tclk_set(ctx, false);
-    (void)sbw_shift_ir8(ctx, SBW_IR_CNTRL_SIG_16BIT);
-    (void)sbw_shift_dr16(ctx, 0x0501);
-    (void)sbw_shift_ir8(ctx, SBW_IR_ADDR_16BIT);
-    (void)sbw_shift_dr20(ctx, address & 0x000FFFFFu);
-    (void)sbw_shift_ir8(ctx, SBW_IR_DATA_TO_ADDR);
+    sbw_shift_ir8_no_capture(ctx, SBW_IR_CNTRL_SIG_16BIT);
+    sbw_shift_dr16_no_capture(ctx, 0x0501);
+    sbw_shift_ir8_no_capture(ctx, SBW_IR_ADDR_16BIT);
+    sbw_shift_dr20_no_capture(ctx, address & 0x000FFFFFu);
+    sbw_shift_ir8_no_capture(ctx, SBW_IR_DATA_TO_ADDR);
     sbw_tclk_set(ctx, true);
     sbw_tclk_set(ctx, false);
 
-    const uint16_t value = sbw_shift_dr16(ctx, 0x0000);
+    const uint16_t value = sbw_shift_dr16_capture(ctx, 0x0000);
 
     sbw_tclk_set(ctx, true);
     sbw_tclk_set(ctx, false);
@@ -700,15 +750,15 @@ static bool sbw_read_block16_quick_internal(sbw_ctx_t *ctx, uint32_t address, ui
     }
 
     sbw_tclk_set(ctx, true);
-    (void)sbw_shift_ir8(ctx, SBW_IR_CNTRL_SIG_16BIT);
-    (void)sbw_shift_dr16(ctx, 0x0501);
-    (void)sbw_shift_ir8(ctx, SBW_IR_ADDR_CAPTURE);
-    (void)sbw_shift_ir8(ctx, SBW_IR_DATA_QUICK);
+    sbw_shift_ir8_no_capture(ctx, SBW_IR_CNTRL_SIG_16BIT);
+    sbw_shift_dr16_no_capture(ctx, 0x0501);
+    sbw_shift_ir8_no_capture(ctx, SBW_IR_ADDR_CAPTURE);
+    sbw_shift_ir8_no_capture(ctx, SBW_IR_DATA_QUICK);
     sbw_tclk_set(ctx, true);
 
     for (size_t index = 0; index < word_count; ++index) {
         sbw_tclk_set(ctx, false);
-        data[index] = sbw_shift_dr16(ctx, 0x0000);
+        data[index] = sbw_shift_dr16_capture(ctx, 0x0000);
         sbw_tclk_set(ctx, true);
     }
 
@@ -786,15 +836,15 @@ static bool sbw_verify_block16_quick_pattern_internal(sbw_ctx_t *ctx,
     }
 
     sbw_tclk_set(ctx, true);
-    (void)sbw_shift_ir8(ctx, SBW_IR_CNTRL_SIG_16BIT);
-    (void)sbw_shift_dr16(ctx, 0x0501);
-    (void)sbw_shift_ir8(ctx, SBW_IR_ADDR_CAPTURE);
-    (void)sbw_shift_ir8(ctx, SBW_IR_DATA_QUICK);
+    sbw_shift_ir8_no_capture(ctx, SBW_IR_CNTRL_SIG_16BIT);
+    sbw_shift_dr16_no_capture(ctx, 0x0501);
+    sbw_shift_ir8_no_capture(ctx, SBW_IR_ADDR_CAPTURE);
+    sbw_shift_ir8_no_capture(ctx, SBW_IR_DATA_QUICK);
     sbw_tclk_set(ctx, true);
 
     for (size_t index = 0; index < word_count; ++index) {
         sbw_tclk_set(ctx, false);
-        const uint16_t actual = sbw_shift_dr16(ctx, 0x0000);
+        const uint16_t actual = sbw_shift_dr16_capture(ctx, 0x0000);
         sbw_tclk_set(ctx, true);
         const uint16_t expected = sbw_pattern_word(index);
 
@@ -868,7 +918,7 @@ static mp_obj_t sbw_native_read_id(mp_obj_t hw_in) {
 
     for (uint32_t attempt = 0; attempt < SBW_JTAG_ATTEMPTS; ++attempt) {
         sbw_begin_session(&ctx);
-        last_id = sbw_shift_ir8(&ctx, SBW_IR_CNTRL_SIG_CAPTURE);
+        last_id = sbw_shift_ir8_capture(&ctx, SBW_IR_CNTRL_SIG_CAPTURE);
         sbw_release(&ctx);
         if (last_id == SBW_JTAG_ID_EXPECTED) {
             ok = true;
@@ -891,8 +941,8 @@ static mp_obj_t sbw_native_bypass_test(mp_obj_t hw_in) {
 
     for (uint32_t attempt = 0; attempt < SBW_JTAG_ATTEMPTS; ++attempt) {
         sbw_begin_session(&ctx);
-        (void)sbw_shift_ir8(&ctx, SBW_IR_BYPASS);
-        captured = sbw_shift_dr16(&ctx, SBW_BYPASS_SMOKE_PATTERN);
+        sbw_shift_ir8_no_capture(&ctx, SBW_IR_BYPASS);
+        captured = sbw_shift_dr16_capture(&ctx, SBW_BYPASS_SMOKE_PATTERN);
         sbw_release(&ctx);
         if (captured == SBW_BYPASS_SMOKE_EXPECTED) {
             ok = true;

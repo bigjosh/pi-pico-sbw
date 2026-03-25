@@ -29,7 +29,6 @@ The hardware descriptor tuple passed to every native call is:
     gpio_oe_clr_addr,
     clock_mask,
     data_mask,
-    power_mask,
 )
 ```
 
