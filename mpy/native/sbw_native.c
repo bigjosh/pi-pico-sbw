@@ -635,6 +635,37 @@ static uint16_t sbw_fram_protection_mask(uint32_t address) {
     return 0;
 }
 
+static bool sbw_block_protection_mask(uint32_t address, size_t word_count, uint16_t *mask_out) {
+    const uint32_t start = address & 0x000FFFFFu;
+
+    if ((start & 0x1u) != 0) {
+        return false;
+    }
+
+    if (word_count == 0) {
+        if (mask_out) {
+            *mask_out = sbw_fram_protection_mask(start);
+        }
+        return true;
+    }
+
+    const uint32_t max_words = (0x00100000u - start) >> 1;
+    if (word_count > max_words) {
+        return false;
+    }
+
+    const uint16_t first = sbw_fram_protection_mask(start);
+    const uint16_t last = sbw_fram_protection_mask(start + (((uint32_t)word_count - 1u) << 1));
+    if (first != last) {
+        return false;
+    }
+
+    if (mask_out) {
+        *mask_out = first;
+    }
+    return true;
+}
+
 static bool sbw_write_syscfg0_low(sbw_ctx_t *ctx, uint16_t low_bits) {
     return sbw_write_mem16_internal(ctx, SBW_SYSCFG0_ADDR_FR4XX,
         SBW_SYSCFG0_FRAM_PASSWORD | (low_bits & 0x00FFu));
@@ -740,12 +771,8 @@ static bool sbw_read_mem16_internal(sbw_ctx_t *ctx, uint32_t address, uint16_t *
     return sbw_in_full_emulation(ctx, NULL);
 }
 
-static bool sbw_read_block16_quick_internal(sbw_ctx_t *ctx, uint32_t address, uint16_t *data, size_t word_count) {
-    if (word_count == 0) {
-        return true;
-    }
-
-    if (!data || !sbw_set_pc_430xv2(ctx, address)) {
+static bool sbw_begin_read_block16_quick_430xv2(sbw_ctx_t *ctx, uint32_t address) {
+    if (!sbw_set_pc_430xv2(ctx, address)) {
         return false;
     }
 
@@ -755,14 +782,73 @@ static bool sbw_read_block16_quick_internal(sbw_ctx_t *ctx, uint32_t address, ui
     sbw_shift_ir8_no_capture(ctx, SBW_IR_ADDR_CAPTURE);
     sbw_shift_ir8_no_capture(ctx, SBW_IR_DATA_QUICK);
     sbw_tclk_set(ctx, true);
+    return true;
+}
 
-    for (size_t index = 0; index < word_count; ++index) {
-        sbw_tclk_set(ctx, false);
-        data[index] = sbw_shift_dr16_capture(ctx, 0x0000);
-        sbw_tclk_set(ctx, true);
+static inline uint16_t sbw_read_block16_quick_word(sbw_ctx_t *ctx) {
+    sbw_tclk_set(ctx, false);
+    const uint16_t value = sbw_shift_dr16_capture(ctx, 0x0000);
+    sbw_tclk_set(ctx, true);
+    return value;
+}
+
+static bool sbw_finish_read_block16_quick_430xv2(sbw_ctx_t *ctx) {
+    (void)ctx;
+    return true;
+}
+
+static bool sbw_read_block16_internal(sbw_ctx_t *ctx, uint32_t address, uint16_t *data, size_t word_count) {
+    if (!sbw_in_full_emulation(ctx, NULL)) {
+        return false;
     }
 
+    if (word_count == 0) {
+        return true;
+    }
+
+    if (!data || !sbw_begin_read_block16_quick_430xv2(ctx, address)) {
+        return false;
+    }
+
+    for (size_t index = 0; index < word_count; ++index) {
+        data[index] = sbw_read_block16_quick_word(ctx);
+    }
+
+    return sbw_finish_read_block16_quick_430xv2(ctx);
+}
+
+static bool sbw_begin_write_block16_quick_430xv2(sbw_ctx_t *ctx, uint32_t address) {
+    if (!sbw_set_pc_430xv2(ctx, (address - 2u) & 0x000FFFFFu)) {
+        return false;
+    }
+
+    sbw_tclk_set(ctx, true);
+    sbw_shift_ir8_no_capture(ctx, SBW_IR_CNTRL_SIG_16BIT);
+    sbw_shift_dr16_no_capture(ctx, 0x0500);
+    sbw_shift_ir8_no_capture(ctx, SBW_IR_ADDR_CAPTURE);
+    sbw_shift_ir8_no_capture(ctx, SBW_IR_DATA_QUICK);
+    sbw_tclk_set(ctx, true);
+
+    // Empirically, FR4133 quick writes need one priming data shift before the first real word lands.
+    sbw_shift_dr16_no_capture(ctx, 0x1111);
+    sbw_tclk_set(ctx, false);
+    sbw_tclk_set(ctx, true);
     return true;
+}
+
+static inline void sbw_write_block16_quick_word(sbw_ctx_t *ctx, uint16_t data) {
+    sbw_shift_dr16_no_capture(ctx, data);
+    sbw_tclk_set(ctx, false);
+    sbw_tclk_set(ctx, true);
+}
+
+static bool sbw_finish_write_block16_quick_430xv2(sbw_ctx_t *ctx) {
+    sbw_shift_ir8_no_capture(ctx, SBW_IR_CNTRL_SIG_16BIT);
+    sbw_shift_dr16_no_capture(ctx, 0x0501);
+    sbw_tclk_set(ctx, true);
+    sbw_tclk_set(ctx, false);
+    sbw_tclk_set(ctx, true);
+    return sbw_in_full_emulation(ctx, NULL);
 }
 
 static bool sbw_write_block16_internal(sbw_ctx_t *ctx, uint32_t address, const uint16_t *data, size_t word_count) {
@@ -774,26 +860,40 @@ static bool sbw_write_block16_internal(sbw_ctx_t *ctx, uint32_t address, const u
         return true;
     }
 
-    const uint16_t first_mask = sbw_fram_protection_mask(address);
+    // Public contract: a block write must stay within a single protection class
+    // (RAM/peripheral, info FRAM, or main FRAM).
+    uint16_t block_mask = 0;
     uint16_t saved_fram_cfg = 0;
     bool fram_cfg_changed = false;
 
-    for (size_t index = 0; index < word_count; ++index) {
-        const uint16_t mask = sbw_fram_protection_mask(address + (uint32_t)(index * 2u));
-        if (mask != first_mask) {
-            return false;
-        }
+    if (!sbw_block_protection_mask(address, word_count, &block_mask)) {
+        return false;
     }
 
     if (!sbw_unlock_fram_for_address(ctx, address, &saved_fram_cfg, &fram_cfg_changed)) {
         return false;
     }
 
-    for (size_t index = 0; index < word_count; ++index) {
-        sbw_write_mem16_sequence(ctx, address + (uint32_t)(index * 2u), data[index]);
+    if (block_mask == 0) {
+        for (size_t index = 0; index < word_count; ++index) {
+            sbw_write_mem16_sequence(ctx, address + (uint32_t)(index * 2u), data[index]);
+        }
+
+        const bool write_ok = sbw_in_full_emulation(ctx, NULL);
+        const bool restore_ok = sbw_restore_fram_protection(ctx, saved_fram_cfg, fram_cfg_changed);
+        return write_ok && restore_ok;
     }
 
-    const bool write_ok = sbw_in_full_emulation(ctx, NULL);
+    if (!sbw_begin_write_block16_quick_430xv2(ctx, address)) {
+        (void)sbw_restore_fram_protection(ctx, saved_fram_cfg, fram_cfg_changed);
+        return false;
+    }
+
+    for (size_t index = 0; index < word_count; ++index) {
+        sbw_write_block16_quick_word(ctx, data[index]);
+    }
+
+    const bool write_ok = sbw_finish_write_block16_quick_430xv2(ctx);
     const bool restore_ok = sbw_restore_fram_protection(ctx, saved_fram_cfg, fram_cfg_changed);
     return write_ok && restore_ok;
 }
@@ -814,11 +914,16 @@ static bool sbw_write_block16_pattern_internal(sbw_ctx_t *ctx, uint32_t address,
         return false;
     }
 
-    for (size_t index = 0; index < word_count; ++index) {
-        sbw_write_mem16_sequence(ctx, address + (uint32_t)(index * 2u), sbw_pattern_word(index));
+    if (!sbw_begin_write_block16_quick_430xv2(ctx, address)) {
+        (void)sbw_restore_fram_protection(ctx, saved_fram_cfg, fram_cfg_changed);
+        return false;
     }
 
-    const bool write_ok = sbw_in_full_emulation(ctx, NULL);
+    for (size_t index = 0; index < word_count; ++index) {
+        sbw_write_block16_quick_word(ctx, sbw_pattern_word(index));
+    }
+
+    const bool write_ok = sbw_finish_write_block16_quick_430xv2(ctx);
     const bool restore_ok = sbw_restore_fram_protection(ctx, saved_fram_cfg, fram_cfg_changed);
     return write_ok && restore_ok;
 }
@@ -1016,7 +1121,7 @@ static mp_obj_t sbw_native_read_block_common(mp_obj_t hw_in, mp_obj_t address_in
 
     for (uint32_t attempt = 0; attempt < SBW_JTAG_ATTEMPTS; ++attempt) {
         sbw_begin_session(&ctx);
-        ok = sbw_prepare_cpu(&ctx, NULL) && sbw_read_block16_quick_internal(&ctx, address, buffer, word_count);
+        ok = sbw_prepare_cpu(&ctx, NULL) && sbw_read_block16_internal(&ctx, address, buffer, word_count);
         sbw_release(&ctx);
         if (ok) {
             break;

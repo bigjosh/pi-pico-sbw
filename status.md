@@ -32,11 +32,12 @@ Important runtime requirement:
 Latest verified results:
 
 - `testsuite.run_regression()` -> `True`
-- `testsuite.run_bench()` -> `(True, (5120, 671727, 142313, 5120, 0, 0))`
-- That is `10,240` bytes in `671,727 us` write and `142,313 us` verify
+- `testsuite.run_bench()` -> `(True, (5120, 134647, 135167, 5120, 0, 0))`
+- regression now explicitly exercises `read_block16(0xFFFC, 2)` and expects `0xEE44, 0xEDC8`
+- That is `10,240` bytes in `134,647 us` write and `135,167 us` verify
 - Approximate throughput:
-  - write: `15 KiB/s`
-  - verify: `71 KiB/s`
+  - write: `74 KiB/s`
+  - verify: `74 KiB/s`
 
 ## Current File Map
 

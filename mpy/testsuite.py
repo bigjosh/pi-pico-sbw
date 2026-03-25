@@ -13,6 +13,7 @@ from sbw_config import (
     REGRESSION_READ_ADDR_1,
     REGRESSION_READ_EXPECTED_0,
     REGRESSION_READ_EXPECTED_1,
+    bytes_to_words_le,
 )
 
 
@@ -34,6 +35,12 @@ def run_regression():
 
         ok, value = sbw.read_mem16(REGRESSION_READ_ADDR_1)
         assert ok and value == REGRESSION_READ_EXPECTED_1
+
+        ok, block = sbw.read_block16(REGRESSION_READ_ADDR_1, 2)
+        assert ok and bytes_to_words_le(block) == (
+            REGRESSION_READ_EXPECTED_1,
+            REGRESSION_READ_EXPECTED_0,
+        )
 
         ok, readback = sbw.write_mem16(REGRESSION_RAM_ADDR_0, REGRESSION_RAM_VALUE_0)
         assert ok and readback == REGRESSION_RAM_VALUE_0

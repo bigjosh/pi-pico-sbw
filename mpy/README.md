@@ -17,6 +17,14 @@ The hot SBW/JTAG path stays inside the native module:
 - fixed compile-time timing
 - PRIMASK-based interrupt masking during critical low pulses
 - full session bring-up/retry/release inside each coarse native call
+- `read_block16` uses the native quick block-read path
+- `write_block16` uses the native quick FRAM block-write path when the address range is in FRAM
+
+For `write_block16`, the public contract is that a single block must stay within one protection class:
+
+- RAM/peripheral
+- info FRAM
+- main FRAM
 
 The hardware descriptor tuple passed to every native call is:
 
