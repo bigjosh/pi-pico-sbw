@@ -32,9 +32,10 @@ Important runtime requirement:
 Latest verified results:
 
 - `testsuite.run_regression()` -> `True`
-- `testsuite.run_bench()` -> `(True, (5120, 135506, 136416, 135392, 136275))`
-- regression now explicitly exercises `read_block16(0xFFFC, 2)` and expects `0xEE44, 0xEDC8`
+- `testsuite.run_bench()` -> `(True, (5120, 135499, 136442, 135389, 136311))`
+- regression now explicitly exercises `read_block16(0xFFFC, 2)` and expects `0xEC84, 0xEBFC`
 - The Python-side round-trip benchmark writes a generated `10,240` byte buffer, reads it back and verifies it, inverts every bit, then repeats the write/read/verify cycle
+- `program.program_once(...)` completed successfully on the live target and returned device UUID `F081201041FBE32363002200`
 - Approximate throughput:
   - write pass 1: `74 KiB/s`
   - read pass 1: `73 KiB/s`
@@ -55,15 +56,21 @@ Latest verified results:
 ### `mpy/`
 
 - [mpy/main.py](D:/Github/pi-pico-sbw/mpy/main.py)
-  Interactive MicroPython shell. Exposes power control and high-level commands like `read-jtagid`, `bypass-test`, `sync-por`, `read-mem16`, `fram-smoke16`, and the Python-side `fram-bench`.
+  Boot entrypoint for the production TSL programming loop.
+- [mpy/program.py](D:/Github/pi-pico-sbw/mpy/program.py)
+  Production TSL programmer. Loads `tsl-calibre-msp.txt`, writes the commissioning timestamp and firmware blocks separately, verifies each block by readback, then power-cycles the target to run it for 1 second.
+- [mpy/debug_shell.py](D:/Github/pi-pico-sbw/mpy/debug_shell.py)
+  Preserved bench shell for low-level SBW/JTAG bring-up and diagnostics.
 - [mpy/sbw.py](D:/Github/pi-pico-sbw/mpy/sbw.py)
-  Thin Python wrapper around the native module. Handles pin setup, target power switching, small formatting helpers, method forwarding into native C, and the Python-side `fram_smoke16` helper.
+  Thin Python wrapper around the native module. Handles pin setup, target power switching, method forwarding into native C, the Python-side `fram_smoke16` helper, and byte-level read/write adapters built on the word-oriented native API.
 - [mpy/sbw_config.py](D:/Github/pi-pico-sbw/mpy/sbw_config.py)
   Hardware descriptor tuple, `RP2350` `SIO` MMIO addresses, pin assignments, regression constants, and the `150 MHz` clock setup/verification helper.
 - [mpy/testsuite.py](D:/Github/pi-pico-sbw/mpy/testsuite.py)
   Automated regression and Python-side benchmark entry points for the live MicroPython path.
 - [mpy/README.md](D:/Github/pi-pico-sbw/mpy/README.md)
   Detailed build/deploy notes for the MicroPython path.
+- [mpy/tsl-calibre-msp.txt](D:/Github/pi-pico-sbw/mpy/tsl-calibre-msp.txt)
+  TSL production firmware image in TI-TXT format.
 
 ### `mpy/native/`
 

@@ -15,14 +15,21 @@ The project is intentionally narrow. It is specialized for the exact target and 
 
 The live, bench-validated path is the MicroPython path in [mpy](D:/Github/pi-pico-sbw/mpy).
 
+The repo now also contains the first production-oriented TSL programmer app:
+
+- local TI-TXT firmware asset: [tsl-calibre-msp.txt](D:/Github/pi-pico-sbw/mpy/tsl-calibre-msp.txt)
+- programming workflow: [program.py](D:/Github/pi-pico-sbw/mpy/program.py)
+- boot entrypoint: [main.py](D:/Github/pi-pico-sbw/mpy/main.py)
+- retained bench shell: [debug_shell.py](D:/Github/pi-pico-sbw/mpy/debug_shell.py)
+
 Latest verified hardware results on the wired target:
 
 - `read-jtagid` -> `0x98`
 - `bypass-test` -> `0x52AD`
 - `sync-por` -> `0xC301`
-- `read-mem16 0xfffe` -> `0xEDC8`
-- `read-mem16 0xfffc` -> `0xEE44`
-- `read-block16 0xfffc 2` -> `0xEE44, 0xEDC8`
+- `read-mem16 0xfffe` -> `0xEBFC`
+- `read-mem16 0xfffc` -> `0xEC84`
+- `read-block16 0xfffc 2` -> `0xEC84, 0xEBFC`
 - RAM write/readback passes at `0x2000` and `0x2002`
 - Python FRAM smoke write/read/restore passes at `0xC400`
 - Python round-trip `fram-bench` for `10,240` bytes returned:
@@ -43,9 +50,13 @@ That is about:
 - [mpy/sbw_config.py](D:/Github/pi-pico-sbw/mpy/sbw_config.py)
   Hardware constants, `RP2350` `SIO` MMIO addresses, regression constants, and the `150 MHz` clock setup/verification logic.
 - [mpy/sbw.py](D:/Github/pi-pico-sbw/mpy/sbw.py)
-  Thin Python wrapper around the native module plus target power control.
+  Thin Python wrapper around the native module plus target power control and byte-level read/write helpers.
+- [mpy/program.py](D:/Github/pi-pico-sbw/mpy/program.py)
+  Production TSL programming app. Loads the TI-TXT image, writes the timestamp and firmware blocks separately, verifies each block by readback, and power-cycles the target to run it briefly.
 - [mpy/main.py](D:/Github/pi-pico-sbw/mpy/main.py)
-  Interactive shell for bench use.
+  Boot entrypoint for the production programmer loop.
+- [mpy/debug_shell.py](D:/Github/pi-pico-sbw/mpy/debug_shell.py)
+  Interactive bench shell preserved from the earlier development workflow.
 - [mpy/testsuite.py](D:/Github/pi-pico-sbw/mpy/testsuite.py)
   Regression and Python-side benchmark entry points.
 - [mpy/README.md](D:/Github/pi-pico-sbw/mpy/README.md)
@@ -113,14 +124,19 @@ Then copy these files to the Pico running MicroPython:
 - `mpy/native/sbw_native.mpy`
 - `mpy/sbw_config.py`
 - `mpy/sbw.py`
+- `mpy/program.py`
 - `mpy/main.py`
+- `mpy/debug_shell.py`
 - `mpy/testsuite.py`
+- `mpy/tsl-calibre-msp.txt`
 
-For an interactive shell:
+On boot, `main.py` now starts the production TSL programmer loop automatically.
+
+For the retained debug shell:
 
 ```python
-import main
-main.repl()
+import debug_shell
+debug_shell.repl()
 ```
 
 ## Primary References

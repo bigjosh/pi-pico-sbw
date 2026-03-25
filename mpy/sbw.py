@@ -97,10 +97,53 @@ class SBWNative:
         # Returns (ok, raw_bytes) from the native quick block-read path.
         return sbw_native.read_block16(self.hw, address, words)
 
+    def read_bytes(self, address, length):
+        if length < 0:
+            raise ValueError("length must be non-negative")
+        if length == 0:
+            return True, b""
+
+        start = address & ~0x1
+        end = address + length
+        aligned_end = (end + 1) & ~0x1
+        word_count = (aligned_end - start) // 2
+
+        ok, payload = self.read_block16(start, word_count)
+        if not ok:
+            return False, b""
+
+        offset = address - start
+        return True, payload[offset : offset + length]
+
     def write_block16(self, address, data):
         # Block writes must stay within one protection class:
         # RAM/peripheral, info FRAM, or main FRAM.
         return bool(sbw_native.write_block16(self.hw, address, data))
+
+    def write_bytes(self, address, data):
+        if not data:
+            return True
+
+        start = address & ~0x1
+        end = address + len(data)
+        aligned_end = (end + 1) & ~0x1
+        total_length = aligned_end - start
+        offset = address - start
+
+        if start != address or total_length != len(data):
+            ok, existing = self.read_block16(start, total_length // 2)
+            if not ok:
+                return False
+            payload = bytearray(existing)
+        else:
+            payload = bytearray(total_length)
+
+        payload[offset : offset + len(data)] = data
+        return self.write_block16(start, bytes(payload))
+
+    def verify_bytes(self, address, expected):
+        ok, actual = self.read_bytes(address, len(expected))
+        return ok and actual == expected, actual
 
     def fram_smoke16(self, address, value):
         ok, original = self.read_mem16(address)

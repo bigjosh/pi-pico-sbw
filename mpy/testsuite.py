@@ -69,6 +69,20 @@ def bench_block_roundtrip(sbw, address, words):
     return True, (words, write1_us, read1_us, write2_us, read2_us)
 
 
+def _exercise_byte_io(sbw, address, payload):
+    ok, original = sbw.read_bytes(address - 1, len(payload) + 1)
+    assert ok
+
+    ok = sbw.write_bytes(address, payload)
+    assert ok
+
+    ok, actual = sbw.read_bytes(address, len(payload))
+    assert ok and actual == payload
+
+    ok = sbw.write_bytes(address - 1, original)
+    assert ok
+
+
 def run_regression():
     sbw = SBWNative()
     sbw.power_on()
@@ -99,6 +113,8 @@ def run_regression():
 
         ok, readback = sbw.write_mem16(REGRESSION_RAM_ADDR_1, REGRESSION_RAM_VALUE_1)
         assert ok and readback == REGRESSION_RAM_VALUE_1
+
+        _exercise_byte_io(sbw, REGRESSION_RAM_ADDR_0 + 1, b"\x11\x22\x33\x44\x55\x66\x77")
 
         ok, original, test_readback, restored_readback = sbw.fram_smoke16(REGRESSION_FRAM_ADDR, REGRESSION_FRAM_VALUE)
         assert ok

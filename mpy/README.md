@@ -4,8 +4,11 @@ This directory is the MicroPython-facing version of the project.
 
 - `sbw_native.mpy` is the native JTAG engine.
 - `sbw.py` is the thin Python wrapper.
-- `main.py` is a small serial shell.
+- `program.py` is the TSL production programmer flow.
+- `main.py` boots straight into the production programmer loop.
+- `debug_shell.py` preserves the old bench shell.
 - `testsuite.py` is the parity regression runner.
+- `tsl-calibre-msp.txt` is the TI-TXT firmware image programmed into the target.
 
 ## Design
 
@@ -26,6 +29,15 @@ Benchmark timing and verification policy stays in Python. The current `fram-benc
 - times the `write_block16` round trip as seen by Python
 - times `read_block16`, verifies the returned bytes, then inverts every bit
 - repeats the write/read/verify cycle and reports all four timings
+
+The production programming flow also stays in Python. It:
+
+- loads the local `tsl-calibre-msp.txt` image
+- parses its contiguous TI-TXT blocks
+- writes the commissioning timestamp block at `0x1800`
+- writes each firmware block separately with no erase step
+- verifies each block by reading it back from the target
+- power-cycles the target, leaves it running for `1` second, then powers it down
 
 For `write_block16`, the public contract is that a single block must stay within one protection class:
 
@@ -94,12 +106,21 @@ Copy these files to the Pico running MicroPython:
 - `mpy/native/sbw_native.mpy`
 - `mpy/sbw_config.py`
 - `mpy/sbw.py`
+- `mpy/program.py`
 - `mpy/main.py`
+- `mpy/debug_shell.py`
 - `mpy/testsuite.py`
+- `mpy/tsl-calibre-msp.txt`
 
-Then run:
+For the production programmer loop:
 
 ```python
 import main
-main.repl()
+```
+
+For the old debug shell:
+
+```python
+import debug_shell
+debug_shell.repl()
 ```
