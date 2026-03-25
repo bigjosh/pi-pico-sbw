@@ -114,6 +114,21 @@ static inline volatile uint32_t *sbw_mmio_ptr(uint32_t address) {
     return (volatile uint32_t *)(uintptr_t)address;
 }
 
+/*
+ * Transport invariants for this file:
+ *
+ * - ctx->tclk_high tracks the logical TCLK state latched in the last TDI slot,
+ *   not the instantaneous SBWTCK pin level.
+ * - During an active SBW/JTAG session, the master keeps SBWTDIO driven between
+ *   logical bit cycles. sbw_io_bit() and sbw_tclk_set() assume the line is
+ *   already owned on entry, release it only for the TDO slot, and reacquire it
+ *   on the closing SBWTCK rising edge.
+ * - sbw_ctx_init() and sbw_release() are explicit boundary states that leave
+ *   SBWTDIO Hi-Z and SBWTCK low. sbw_entry_rst_high() / sbw_entry_rst_low()
+ *   re-establish driven ownership before active bit traffic starts.
+ * - Any helper that drives SBWTCK low must keep IRQs masked until SBWTCK is
+ *   high again, or an overlong low phase can drop the active SBW session.
+ */
 static void sbw_parse_hw_desc(mp_obj_t hw_in, sbw_hw_desc_t *hw) {
     size_t len = 0;
     mp_obj_t *items = NULL;
@@ -239,16 +254,17 @@ static inline bool sbw_io_bit(sbw_ctx_t *ctx, bool tms, bool tdi) {
     volatile uint32_t *const gpio_in = ctx->hw.gpio_in;
     volatile uint32_t *const gpio_out_set = ctx->hw.gpio_out_set;
     volatile uint32_t *const gpio_out_clr = ctx->hw.gpio_out_clr;
-    volatile uint32_t *const gpio_oe_set = ctx->hw.gpio_oe_set;
     volatile uint32_t *const gpio_oe_clr = ctx->hw.gpio_oe_clr;
+    volatile uint32_t *const gpio_oe_set = ctx->hw.gpio_oe_set;
     const uint32_t clock_mask = ctx->hw.clock_mask;
     const uint32_t data_mask = ctx->hw.data_mask;
 
     // One logical SBW bit is three clocked sub-slots on SBWTDIO: drive TMS, drive TDI, then
     // release the line so the target can return TDO on the third low pulse.
+    // Active-session callers keep SBWTDIO driven between logical bits, so this sequence starts
+    // with the master already owning the bus.
     // Slot 1: present TMS while we still own SBWTDIO.
     sbw_mmio_write(tms ? gpio_out_set : gpio_out_clr, data_mask);
-    sbw_mmio_write(gpio_oe_set, data_mask);
     sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
     sbw_irq_disable();
     sbw_mmio_write(gpio_out_clr, clock_mask);
@@ -266,6 +282,8 @@ static inline bool sbw_io_bit(sbw_ctx_t *ctx, bool tms, bool tdi) {
     sbw_irq_enable();
 
     // Slot 3: release SBWTDIO before the falling edge so the target can drive TDO.
+    // Once SBWTCK returns high, the target should have released the line, so we can
+    // immediately take ownership again instead of leaving the bus floating between bits.
     sbw_mmio_write(gpio_oe_clr, data_mask);
     sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
     sbw_irq_disable();
@@ -273,6 +291,7 @@ static inline bool sbw_io_bit(sbw_ctx_t *ctx, bool tms, bool tdi) {
     sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES);
     const bool tdo = (sbw_mmio_read(gpio_in) & data_mask) != 0;
     sbw_mmio_write(gpio_out_set, clock_mask);
+    sbw_mmio_write(gpio_oe_set, data_mask);
     sbw_irq_enable();
     return tdo;
 }
@@ -280,12 +299,11 @@ static inline bool sbw_io_bit(sbw_ctx_t *ctx, bool tms, bool tdi) {
 static inline void sbw_tclk_set(sbw_ctx_t *ctx, bool high) {
     volatile uint32_t *const gpio_out_set = ctx->hw.gpio_out_set;
     volatile uint32_t *const gpio_out_clr = ctx->hw.gpio_out_clr;
-    volatile uint32_t *const gpio_oe_set = ctx->hw.gpio_oe_set;
     volatile uint32_t *const gpio_oe_clr = ctx->hw.gpio_oe_clr;
+    volatile uint32_t *const gpio_oe_set = ctx->hw.gpio_oe_set;
     const uint32_t clock_mask = ctx->hw.clock_mask;
     const uint32_t data_mask = ctx->hw.data_mask;
 
-    sbw_mmio_write(gpio_oe_set, data_mask);
     if (ctx->tclk_high) {
         sbw_mmio_write(gpio_out_clr, data_mask);
         sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
@@ -320,6 +338,7 @@ static inline void sbw_tclk_set(sbw_ctx_t *ctx, bool high) {
     sbw_mmio_write(gpio_out_clr, clock_mask);
     sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES);
     sbw_mmio_write(gpio_out_set, clock_mask);
+    sbw_mmio_write(gpio_oe_set, data_mask);
     sbw_irq_enable();
     ctx->tclk_high = high;
 }

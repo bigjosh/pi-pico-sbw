@@ -78,7 +78,7 @@ Bench wiring used for the validated path:
 Important constraints:
 
 - `GP4` target power is a bring-up convenience, not a production-grade supply rail
-- `SBWTDIO` currently has no series resistor, so the firmware leaves it as input except during intentional drive windows
+- `SBWTDIO` currently has no series resistor, so the native transport only releases it for the TDO slot itself and for explicit session boundary handling
 
 ## Clock Requirement
 

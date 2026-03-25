@@ -79,6 +79,7 @@ Latest verified results:
   - direct MMIO `SIO` GPIO access
   - fixed cycle-counted `SBW` slot timing
   - interrupt masking around critical low pulses
+  - active-session `SBWTDIO` ownership, with the line driven between logical bit cycles and only released for the `TDO` slot and explicit session boundaries
   - `SBW` entry/release
   - `JTAG` TAP reset and IR/DR shifting
   - `SyncJtag_AssertPor` / `POR` flow

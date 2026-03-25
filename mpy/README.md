@@ -19,6 +19,7 @@ The hot SBW/JTAG path stays inside the native module:
 - direct MMIO writes to SIO GPIO registers
 - fixed compile-time timing
 - PRIMASK-based interrupt masking during critical low pulses
+- `SBWTDIO` stays actively driven between logical JTAG/SBW bit cycles and is only released for the TDO slot and explicit session boundary handling
 - full session bring-up/retry/release inside each coarse native call
 - `read_block16` uses the native quick block-read path
 - `write_block16` uses the native quick FRAM block-write path when the address range is in FRAM

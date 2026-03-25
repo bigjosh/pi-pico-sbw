@@ -2,9 +2,11 @@
 
 This folder contains the MicroPython native module source and build output for `sbw_native`.
 
-This implements a bit-banged Spy-Bi-Wire driver. It must be in C to meet timing requirements. (Or I guess could be in PIO but this is simpler and fast enough). It does occasionally disable IRQs, but only for ~50us.
+This implements a bit-banged Spy-Bi-Wire driver. It must be in C to meet timing requirements. It does occasionally disable IRQs, but only for the very short SBWTCK low phases.
 
 The intended consumer is the Python layer in [sbw.py](D:/Github/pi-pico-sbw/mpy/sbw.py). This file documents the API that the Python side is allowed to rely on.
+
+During an active SBW/JTAG session, the native transport keeps `SBWTDIO` actively driven between logical bit cycles. It only releases the line for the `TDO` slot itself and for explicit session-boundary handling such as `release`/entry.
 
 ## Module Name
 
