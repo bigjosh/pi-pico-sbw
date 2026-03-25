@@ -3,7 +3,7 @@
 ## Snapshot
 
 - Branch: `codex/python-base-c-jtag`
-- Last committed base: `77866c6`
+- Last committed base: `95c4f0e`
 - Current repo direction: MicroPython orchestration + native C `.mpy` JTAG engine
 - Older Pico SDK firmware path and abandoned `PIO` handoff material have been removed from the repo
 
@@ -25,9 +25,9 @@ Validated environment:
 
 Important runtime requirement:
 
-- the native module assumes `125 MHz`
-- official MicroPython on this board booted at `150 MHz`
-- the fixture must set `machine.freq(125000000)` before importing `sbw.py`
+- the native module assumes `150 MHz`
+- `SBWNative()` now attempts `machine.freq(150000000)` at startup
+- startup reads the clock back and raises if the board did not actually take `150 MHz`
 
 Latest verified results:
 
@@ -56,7 +56,7 @@ Latest verified results:
 - [mpy/sbw.py](D:/Github/pi-pico-sbw/mpy/sbw.py)
   Thin Python wrapper around the native module. Handles pin setup, target power switching, small formatting helpers, and method forwarding into native C.
 - [mpy/sbw_config.py](D:/Github/pi-pico-sbw/mpy/sbw_config.py)
-  Hardware descriptor tuple, `RP2350` `SIO` MMIO addresses, pin assignments, regression constants, and the `125 MHz` clock check.
+  Hardware descriptor tuple, `RP2350` `SIO` MMIO addresses, pin assignments, regression constants, and the `150 MHz` clock setup/verification helper.
 - [mpy/testsuite.py](D:/Github/pi-pico-sbw/mpy/testsuite.py)
   Automated regression and benchmark entry points for the live MicroPython path.
 - [mpy/README.md](D:/Github/pi-pico-sbw/mpy/README.md)
@@ -96,7 +96,7 @@ Latest verified results:
 
 - keep the native C path correct and self-contained
 - keep Python thin and policy-focused
-- preserve the `125 MHz` clock contract explicitly
+- preserve the `150 MHz` clock contract explicitly
 - optimize inside `mpy/native/sbw_native.c` if more throughput is needed
 
 ## Known Caveats

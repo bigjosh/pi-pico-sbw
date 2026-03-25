@@ -3,7 +3,7 @@ from micropython import const
 import machine
 
 
-SBW_SYS_CLK_HZ = const(125_000_000)
+SBW_SYS_CLK_HZ = const(150_000_000)
 
 SBW_PIN_CLOCK = const(2)
 SBW_PIN_DATA = const(3)
@@ -70,15 +70,16 @@ def current_sys_clk_hz():
     return int(freq)
 
 
-def assert_system_clock_125mhz():
+def ensure_system_clock():
+    machine.freq(SBW_SYS_CLK_HZ)
     actual = current_sys_clk_hz()
     if actual != SBW_SYS_CLK_HZ:
-        raise RuntimeError("expected 125000000 Hz system clock, got %d Hz" % actual)
+        raise RuntimeError("expected 150000000 Hz system clock, got %d Hz" % actual)
     return actual
 
 
 def cycles_to_us(cycles):
-    return int(cycles) // 125
+    return int(cycles) // 150
 
 
 def bytes_to_words_le(data):

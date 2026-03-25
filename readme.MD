@@ -36,7 +36,7 @@ That is about:
 - [mpy/native/sbw_native.c](D:/Github/pi-pico-sbw/mpy/native/sbw_native.c)
   Native MicroPython module. Owns the `SBW` transport, `JTAG` sequencing, memory read/write, FRAM smoke, and FRAM benchmark.
 - [mpy/sbw_config.py](D:/Github/pi-pico-sbw/mpy/sbw_config.py)
-  Hardware constants, `RP2350` `SIO` MMIO addresses, regression constants, and the `125 MHz` clock guard.
+  Hardware constants, `RP2350` `SIO` MMIO addresses, regression constants, and the `150 MHz` clock setup/verification logic.
 - [mpy/sbw.py](D:/Github/pi-pico-sbw/mpy/sbw.py)
   Thin Python wrapper around the native module plus target power control.
 - [mpy/main.py](D:/Github/pi-pico-sbw/mpy/main.py)
@@ -66,18 +66,9 @@ Important constraints:
 
 ## Clock Requirement
 
-The native module assumes a `125 MHz` system clock.
+The native module assumes a `150 MHz` system clock.
 
-The Python wrapper checks `machine.freq()` and raises if it is not exactly `125000000`.
-
-On the live `RPI_PICO2_W` test board with official MicroPython `v1.27.0`, the default boot clock was `150 MHz`, so a fixture image must set:
-
-```python
-import machine
-machine.freq(125000000)
-```
-
-before importing the SBW wrapper.
+At `SBWNative()` startup, the Python wrapper calls `machine.freq(150000000)`, reads the actual clock back, and raises if the board did not take that setting.
 
 ## Build And Deploy
 
@@ -99,8 +90,6 @@ Then copy these files to the Pico running MicroPython:
 For an interactive shell:
 
 ```python
-import machine
-machine.freq(125000000)
 import main
 main.repl()
 ```

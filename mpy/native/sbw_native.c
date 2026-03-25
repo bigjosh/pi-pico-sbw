@@ -5,7 +5,7 @@
 #include "py/dynruntime.h"
 
 enum {
-    SBW_SYS_CLK_HZ = 125000000u,
+    SBW_SYS_CLK_HZ = 150000000u,
     SBW_CYCLES_PER_MS = SBW_SYS_CLK_HZ / 1000u,
     SBW_JTAG_ATTEMPTS = 3,
     SBW_JTAG_TAP_RESET_BITS = 6,

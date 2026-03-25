@@ -35,11 +35,9 @@ The hardware descriptor tuple passed to every native call is:
 
 ## Clock Assumption
 
-The native module assumes a `125 MHz` system clock.
+The native module assumes a `150 MHz` system clock.
 
-`sbw.py` calls `machine.freq()` at startup and raises if the clock is anything else.
-
-On the live `RPI_PICO2_W` test board with official MicroPython `v1.27.0`, the default clock came up at `150 MHz`, so `machine.freq(125000000)` must be applied before constructing `SBWNative()`. The clean place to do that in a fixture image is `boot.py`.
+`sbw.py` calls `machine.freq(150000000)` during `SBWNative()` startup, reads the clock back, and raises if the board did not actually take that setting.
 
 ## Build
 
@@ -64,8 +62,6 @@ Copy these files to the Pico running MicroPython:
 Then run:
 
 ```python
-import machine
-machine.freq(125000000)
 import main
 main.repl()
 ```

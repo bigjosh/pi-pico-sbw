@@ -14,9 +14,9 @@ from sbw_config import (
     GPIO_OUT_ADDR,
     GPIO_OUT_SET_ADDR,
     SBW_TARGET_POWER_SETTLE_MS,
-    assert_system_clock_125mhz,
     bytes_to_words_le,
     cycles_to_us,
+    ensure_system_clock,
 )
 
 
@@ -32,7 +32,7 @@ def _mask_to_pin(mask):
 
 class SBWNative:
     def __init__(self, hw=DEFAULT_HW):
-        assert_system_clock_125mhz()
+        ensure_system_clock()
         self.hw = tuple(hw)
         self._clock_pin = _mask_to_pin(self.hw[5])
         self._data_pin = _mask_to_pin(self.hw[6])
