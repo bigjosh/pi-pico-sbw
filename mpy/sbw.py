@@ -94,7 +94,7 @@ class SBWNative:
         return sbw_native.write_mem16(self.hw, address, value)
 
     def read_block16(self, address, words):
-        # Returns (ok, raw_bytes) from the native quick block-read path.
+        # Returns (ok, raw_bytes) from the native block-read path.
         return sbw_native.read_block16(self.hw, address, words)
 
     def read_bytes(self, address, length):
@@ -116,7 +116,7 @@ class SBWNative:
         return True, payload[offset : offset + length]
 
     def write_block16(self, address, data):
-        # Block writes must stay within one protection class:
+        # Block writes must stay within one writable region class:
         # RAM/peripheral, info FRAM, or main FRAM.
         return bool(sbw_native.write_block16(self.hw, address, data))
 
@@ -145,7 +145,7 @@ class SBWNative:
         ok, actual = self.read_bytes(address, len(expected))
         return ok and actual == expected, actual
 
-    def fram_smoke16(self, address, value):
+    def mem_smoke16(self, address, value):
         ok, original = self.read_mem16(address)
         if not ok:
             return False, 0, 0, 0

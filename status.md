@@ -33,7 +33,7 @@ Latest verified results:
 
 - `testsuite.run_regression()` -> `True`
 - `testsuite.run_bench()` -> `(True, (5120, 135499, 136442, 135389, 136311))`
-- regression now explicitly exercises `read_block16(0xFFFC, 2)` and expects `0xEC84, 0xEBFC`
+- regression now rechecks single-word reads on the known RAM scratch words at `0x2000` / `0x2002`, and exercises the device descriptor window with `read_block16(0x1A00, 11)` expecting `0x0606` at `0x1A00` and `0x0811` at `0x1A14`
 - The Python-side round-trip benchmark writes a generated `10,240` byte buffer, reads it back and verifies it, inverts every bit, then repeats the write/read/verify cycle
 - `program.program_once(...)` completed successfully on the live target and returned device UUID `F081201041FBE32363002200`
 - Approximate throughput:
@@ -62,7 +62,7 @@ Latest verified results:
 - [mpy/debug_shell.py](D:/Github/pi-pico-sbw/mpy/debug_shell.py)
   Preserved bench shell for low-level SBW/JTAG bring-up and diagnostics.
 - [mpy/sbw.py](D:/Github/pi-pico-sbw/mpy/sbw.py)
-  Thin Python wrapper around the native module. Handles pin setup, target power switching, method forwarding into native C, the Python-side `fram_smoke16` helper, and byte-level read/write adapters built on the word-oriented native API.
+  Thin Python wrapper around the native module. Handles pin setup, target power switching, method forwarding into native C, the Python-side `mem_smoke16` helper, and byte-level read/write adapters built on the word-oriented native API.
 - [mpy/sbw_config.py](D:/Github/pi-pico-sbw/mpy/sbw_config.py)
   Hardware descriptor tuple, `RP2350` `SIO` MMIO addresses, pin assignments, regression constants, and the `150 MHz` clock setup/verification helper.
 - [mpy/testsuite.py](D:/Github/pi-pico-sbw/mpy/testsuite.py)
@@ -83,7 +83,7 @@ Latest verified results:
   - `SBW` entry/release
   - `JTAG` TAP reset and IR/DR shifting
   - `SyncJtag_AssertPor` / `POR` flow
-  - target memory read/write
+  - general target memory read/write
   It intentionally does not contain benchmark timing, smoke-test policy, or synthetic-pattern policy anymore.
 - [mpy/native/Makefile](D:/Github/pi-pico-sbw/mpy/native/Makefile)
   Build rules for generating `sbw_native.mpy` using MicroPython `dynruntime.mk`.

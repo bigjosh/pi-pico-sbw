@@ -21,10 +21,10 @@ The hot SBW/JTAG path stays inside the native module:
 - PRIMASK-based interrupt masking during critical low pulses
 - `SBWTDIO` stays actively driven between logical JTAG/SBW bit cycles and is only released for the TDO slot and explicit session boundary handling
 - full session bring-up/retry/release inside each coarse native call
-- `read_block16` uses the native quick block-read path
-- `write_block16` uses the native quick FRAM block-write path when the address range is in FRAM
+- `read_block16` uses the native block-read path, which is valid across the FR4133 memory map
+- `write_block16` is a general memory-write API; it uses the native quick block-write path only when the address range is in FRAM
 
-Benchmark timing and verification policy stays in Python. The current `fram-bench` flow:
+Benchmark timing and verification policy stays in Python. The current block round-trip benchmark flow:
 
 - generates a deterministic block in Python
 - times the `write_block16` round trip as seen by Python
@@ -40,7 +40,7 @@ The production programming flow also stays in Python. It:
 - verifies each block by reading it back from the target
 - power-cycles the target, leaves it running for `1` second, then powers it down
 
-For `write_block16`, the public contract is that a single block must stay within one protection class:
+For `write_block16`, the public contract is that a single block must stay within one writable region class:
 
 - RAM/peripheral
 - info FRAM

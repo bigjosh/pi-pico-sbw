@@ -27,12 +27,12 @@ Latest verified hardware results on the wired target:
 - `read-jtagid` -> `0x98`
 - `bypass-test` -> `0x52AD`
 - `sync-por` -> `0xC301`
-- `read-mem16 0xfffe` -> `0xEBFC`
-- `read-mem16 0xfffc` -> `0xEC84`
-- `read-block16 0xfffc 2` -> `0xEC84, 0xEBFC`
+- `read-mem16 0x2000` -> `0x1234` after regression RAM write
+- `read-mem16 0x2002` -> `0xA55A` after regression RAM write
+- `read-block16 0x1a00 11` -> descriptor span with `0x0606` at `0x1A00` and `0x0811` at `0x1A14`
 - RAM write/readback passes at `0x2000` and `0x2002`
-- Python FRAM smoke write/read/restore passes at `0xC400`
-- Python round-trip `fram-bench` for `10,240` bytes returned:
+- Python memory smoke write/read/restore passes at `0xC400`
+- Python round-trip block benchmark for `10,240` bytes returned:
   - `write1=135,506 us`
   - `read1=136,416 us`
   - `write2=135,392 us`
@@ -46,7 +46,7 @@ That is about:
 ## Repo Layout
 
 - [mpy/native/sbw_native.c](D:/Github/pi-pico-sbw/mpy/native/sbw_native.c)
-  Native MicroPython module. Owns the `SBW` transport, `JTAG` sequencing, and memory read/write primitives. It does not own benchmark policy, smoke-test policy, or timing.
+  Native MicroPython module. Owns the `SBW` transport, `JTAG` sequencing, and general target memory read/write primitives. It does not own benchmark policy, smoke-test policy, or timing.
 - [mpy/sbw_config.py](D:/Github/pi-pico-sbw/mpy/sbw_config.py)
   Hardware constants, `RP2350` `SIO` MMIO addresses, regression constants, and the `150 MHz` clock setup/verification logic.
 - [mpy/sbw.py](D:/Github/pi-pico-sbw/mpy/sbw.py)

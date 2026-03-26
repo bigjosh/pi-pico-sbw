@@ -117,7 +117,9 @@ Writes a single 16-bit word, reads it back, and returns the readback value.
   - `ok`: `bool`
   - `data_bytes`: `bytes`
 
-This is the native quick block-read API. It returns raw little-endian bytes.
+This is the native block-read API. On FR4133 the underlying Data Quick read
+sequence is valid across the target memory map, so this routine is not limited
+to FRAM.
 
 ### `write_block16(hw, address, data_bytes) -> bool`
 
@@ -131,8 +133,10 @@ This is the native block-write API.
 
 Behavior:
 
-- for FRAM address ranges, it uses the fast quick-write path
-- for non-FRAM ranges such as RAM/peripherals, it falls back to the per-word write path
+- for FRAM address ranges, it uses the fast quick block-write path with FRAM
+  protection handling
+- for non-FRAM writable ranges such as RAM/peripherals, it falls back to the
+  standard per-word write path
 
 Public contract:
 
@@ -150,7 +154,7 @@ The native module owns:
 - timing-critical SBW slot generation
 - JTAG sequencing
 - target memory read/write implementation
-- FRAM quick-write and quick-read mechanics
+- generic quick-read mechanics plus FRAM-specific protection and quick-write handling
 
 Python owns:
 

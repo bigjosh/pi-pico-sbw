@@ -20,7 +20,7 @@ def _print_help():
     print("  read-mem16 <addr>")
     print("  read-block16 <addr> <words>")
     print("  write-read-mem16 <addr> <value>")
-    print("  fram-smoke16 <addr> <value>")
+    print("  mem-smoke16 <addr> <value>")
     print("  fram-bench <addr> <words>")
 
 
@@ -117,14 +117,14 @@ def repl():
                         readback,
                         "(verified)" if ok else "(unexpected)",
                     ))
-            elif cmd == "fram-smoke16":
+            elif cmd == "mem-smoke16":
                 if len(argv) != 3:
-                    print("usage: fram-smoke16 <addr> <value>")
+                    print("usage: mem-smoke16 <addr> <value>")
                 elif _require_power(sbw):
                     address = _parse_u32(argv[1])
                     value = _parse_u32(argv[2])
-                    ok, original, test_readback, restored_readback = sbw.fram_smoke16(address, value)
-                    print("fram[0x%05X] orig=0x%04X test=0x%04X readback=0x%04X restore=0x%04X %s" % (
+                    ok, original, test_readback, restored_readback = sbw.mem_smoke16(address, value)
+                    print("mem[0x%05X] orig=0x%04X test=0x%04X readback=0x%04X restore=0x%04X %s" % (
                         address & 0xFFFFF,
                         original,
                         value & 0xFFFF,

@@ -24,7 +24,7 @@ enum {
     SBW_IR_ADDR_CAPTURE = 0x84,
     SBW_IR_DATA_TO_ADDR = 0x85,
     SBW_IR_BYPASS = 0xFF,
-    SBW_SAFE_FRAM_PC = 0x0004,
+    SBW_SAFE_ACCESS_PC = 0x0004,
     SBW_SYSCFG0_ADDR_FR4XX = 0x0160,
     SBW_SYSCFG0_FRAM_PASSWORD = 0xA500,
     SBW_SYSCFG0_PFWP = 0x0001,
@@ -493,7 +493,7 @@ static bool sbw_execute_por(sbw_ctx_t *ctx, uint16_t *control_capture) {
     sbw_tclk_set(ctx, true);
     sbw_tclk_set(ctx, false);
     sbw_tclk_set(ctx, true);
-    sbw_shift_dr16_no_capture(ctx, SBW_SAFE_FRAM_PC);
+    sbw_shift_dr16_no_capture(ctx, SBW_SAFE_ACCESS_PC);
 
     sbw_tclk_set(ctx, false);
     sbw_tclk_set(ctx, true);
@@ -731,6 +731,7 @@ static bool sbw_read_mem16_internal(sbw_ctx_t *ctx, uint32_t address, uint16_t *
 }
 
 static bool sbw_begin_read_block16_quick_430xv2(sbw_ctx_t *ctx, uint32_t address) {
+    // On FR4133, the Data Quick read path works across the target memory map.
     if (!sbw_set_pc_430xv2(ctx, address)) {
         return false;
     }
@@ -819,8 +820,12 @@ static bool sbw_write_block16_internal(sbw_ctx_t *ctx, uint32_t address, const u
         return true;
     }
 
-    // Public contract: a block write must stay within a single protection class
-    // (RAM/peripheral, info FRAM, or main FRAM).
+    // Public contract: a block write must stay within a single writable region
+    // class so the access strategy remains uniform across the whole block.
+    // On FR4133 that means one of:
+    // - RAM/peripheral (standard per-word path)
+    // - info FRAM (FRAM protection + quick block-write path)
+    // - main FRAM (FRAM protection + quick block-write path)
     uint16_t block_mask = 0;
     uint16_t saved_fram_cfg = 0;
     bool fram_cfg_changed = false;

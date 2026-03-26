@@ -5,16 +5,16 @@ from sbw_config import (
     BYPASS_EXPECTED,
     FULL_EMULATION_MASK,
     JTAG_ID_EXPECTED,
+    REGRESSION_DESCRIPTOR_ADDR_0,
+    REGRESSION_DESCRIPTOR_ADDR_1,
+    REGRESSION_DESCRIPTOR_EXPECTED_0,
+    REGRESSION_DESCRIPTOR_EXPECTED_1,
     REGRESSION_FRAM_ADDR,
     REGRESSION_FRAM_VALUE,
     REGRESSION_RAM_ADDR_0,
     REGRESSION_RAM_ADDR_1,
     REGRESSION_RAM_VALUE_0,
     REGRESSION_RAM_VALUE_1,
-    REGRESSION_READ_ADDR_0,
-    REGRESSION_READ_ADDR_1,
-    REGRESSION_READ_EXPECTED_0,
-    REGRESSION_READ_EXPECTED_1,
     bytes_to_words_le,
 )
 
@@ -96,27 +96,27 @@ def run_regression():
         ok, control_capture = sbw.sync_and_por()
         assert ok and (control_capture & FULL_EMULATION_MASK) == FULL_EMULATION_MASK
 
-        ok, value = sbw.read_mem16(REGRESSION_READ_ADDR_0)
-        assert ok and value == REGRESSION_READ_EXPECTED_0
-
-        ok, value = sbw.read_mem16(REGRESSION_READ_ADDR_1)
-        assert ok and value == REGRESSION_READ_EXPECTED_1
-
-        ok, block = sbw.read_block16(REGRESSION_READ_ADDR_1, 2)
-        assert ok and bytes_to_words_le(block) == (
-            REGRESSION_READ_EXPECTED_1,
-            REGRESSION_READ_EXPECTED_0,
-        )
-
         ok, readback = sbw.write_mem16(REGRESSION_RAM_ADDR_0, REGRESSION_RAM_VALUE_0)
         assert ok and readback == REGRESSION_RAM_VALUE_0
 
         ok, readback = sbw.write_mem16(REGRESSION_RAM_ADDR_1, REGRESSION_RAM_VALUE_1)
         assert ok and readback == REGRESSION_RAM_VALUE_1
 
+        ok, value = sbw.read_mem16(REGRESSION_RAM_ADDR_0)
+        assert ok and value == REGRESSION_RAM_VALUE_0
+
+        ok, value = sbw.read_mem16(REGRESSION_RAM_ADDR_1)
+        assert ok and value == REGRESSION_RAM_VALUE_1
+
+        descriptor_words = ((REGRESSION_DESCRIPTOR_ADDR_1 - REGRESSION_DESCRIPTOR_ADDR_0) // 2) + 1
+        ok, block = sbw.read_block16(REGRESSION_DESCRIPTOR_ADDR_0, descriptor_words)
+        descriptor = bytes_to_words_le(block)
+        assert ok and descriptor[0] == REGRESSION_DESCRIPTOR_EXPECTED_0
+        assert descriptor[-1] == REGRESSION_DESCRIPTOR_EXPECTED_1
+
         _exercise_byte_io(sbw, REGRESSION_RAM_ADDR_0 + 1, b"\x11\x22\x33\x44\x55\x66\x77")
 
-        ok, original, test_readback, restored_readback = sbw.fram_smoke16(REGRESSION_FRAM_ADDR, REGRESSION_FRAM_VALUE)
+        ok, original, test_readback, restored_readback = sbw.mem_smoke16(REGRESSION_FRAM_ADDR, REGRESSION_FRAM_VALUE)
         assert ok
         assert test_readback == REGRESSION_FRAM_VALUE
         assert restored_readback == original
