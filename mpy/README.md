@@ -102,6 +102,19 @@ python -m pip install --user pyelftools
 
 The build output is `mpy/native/sbw_native.mpy`.
 
+To deploy the natmod with post-copy SHA-256 verification:
+
+```powershell
+.\tools\deploy-native.ps1
+```
+
+This script:
+
+- builds `sbw_native.mpy` unless `-SkipBuild` is passed
+- copies it to the Pico with `mpremote cp`
+- computes `SHA-256` locally and again on the Pico
+- hard-fails on any mismatch with no retry
+
 Copy these files to the Pico running MicroPython:
 
 - `mpy/native/sbw_native.mpy`

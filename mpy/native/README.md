@@ -143,6 +143,74 @@ Public contract:
   - main FRAM
 - `data_bytes` length must be even
 
+### `pio_test_word(hw, pattern_word, fifo_words) -> bool`
+
+- `hw`: 7-item hardware tuple
+- `pattern_word`: packed chunk descriptor
+  - bits `[4:0]` = logical bit count minus 1
+  - bits above that = successive `(TMS, TDI)` pairs, LSB-first
+- `fifo_words`: number of times to repeat that packed FIFO word
+- returns:
+  - `bool`
+
+This is a standalone PIO waveform exerciser for scope/debug work. It does not
+perform SBW entry, JTAG state handling, or target memory operations. It only:
+
+- hands `GP2/GP3` to `PIO0`
+- emits repeated logical SBW bit cells at the fixed `10 MHz` slot rate
+- restores the pins to normal SIO ownership afterward
+
+### `pio_packet_words(hw, data_bytes) -> bool`
+
+- `hw`: 7-item hardware tuple
+- `data_bytes`: bytes-like object containing little-endian 32-bit FIFO words
+- returns:
+  - `bool`
+
+This is the packet-driven SBW PIO test harness. Each 32-bit FIFO word packs up
+to 8 logical packets in 4-bit nibbles, LSB-first:
+
+- bit 0: `DONE`
+- bit 1: `TMS`
+- bit 2: `TDI1`
+- bit 3: `TDI2` / held level after the TDO slot
+
+The packet engine:
+
+- uses `TDI1 == TDI2` for ordinary driven bits
+- allows `TDI1 != TDI2` to model held-level transitions
+- releases `SBWTDIO` only during the TDO slot
+- treats `DONE=1` as “no more packets in this FIFO word”
+- flushes the current ISR contents to RX FIFO
+- discards the remaining bits of the current FIFO word and resumes from the next word
+
+### `pio_clock_square(hw, duration_us) -> bool`
+
+- `hw`: 7-item hardware tuple
+- `duration_us`: approximate burst length in microseconds
+- returns:
+  - `bool`
+
+This is the simplest possible PIO smoke test:
+
+- only `SBWTCK` is handed to `PIO0`
+- `SBWTDIO` stays out of the test
+- the PIO program is just two wrapped instructions that generate a `10 MHz`
+  square wave on the clock pin
+
+### `pio_clock_data_square(hw, duration_us) -> bool`
+
+- `hw`: 7-item hardware tuple
+- `duration_us`: approximate burst length in microseconds
+- returns:
+  - `bool`
+
+This is the next-step two-pin smoke test:
+
+- `GP2` and `GP3` are both handed to `PIO0`
+- the PIO program is just two wrapped `SET PINS` instructions
+- `GP2` and `GP3` are driven as opposite-phase `10 MHz` square waves
+
 ## Ownership Boundary
 
 The native module owns:

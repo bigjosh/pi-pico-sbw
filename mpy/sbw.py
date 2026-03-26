@@ -120,6 +120,92 @@ class SBWNative:
         # RAM/peripheral, info FRAM, or main FRAM.
         return bool(sbw_native.write_block16(self.hw, address, data))
 
+    def pio_test_word(self, pattern_word, fifo_words):
+        self.release()
+        try:
+            return bool(sbw_native.pio_test_word(self.hw, pattern_word, fifo_words))
+        finally:
+            self.release()
+
+    def pio_test_pairs(self, pairs=(0, 1, 2, 3), fifo_words=1024):
+        sequence = tuple(int(pair) & 0x3 for pair in pairs)
+        if not sequence:
+            raise ValueError("pairs must not be empty")
+        if len(sequence) > 13:
+            raise ValueError("pairs must have at most 13 entries")
+
+        pattern_word = len(sequence) - 1
+        for index, pair in enumerate(sequence):
+            pattern_word |= pair << (5 + index * 2)
+
+        return self.pio_test_word(pattern_word, fifo_words)
+
+    def pio_packet_words(self, words):
+        payload = bytearray()
+        for word in words:
+            value = int(word) & 0xFFFFFFFF
+            payload.extend(value.to_bytes(4, "little"))
+        self.release()
+        try:
+            return bool(sbw_native.pio_packet_words(self.hw, bytes(payload)))
+        finally:
+            self.release()
+
+    def pio_packet_words_capture(self, words):
+        payload = bytearray()
+        for word in words:
+            value = int(word) & 0xFFFFFFFF
+            payload.extend(value.to_bytes(4, "little"))
+        self.release()
+        try:
+            return sbw_native.pio_packet_words_capture(self.hw, bytes(payload))
+        finally:
+            self.release()
+
+    def pio_packets(self, packets):
+        return bool(self.pio_packets_capture(packets)[0])
+
+    def pio_packets_capture(self, packets):
+        sequence = []
+        for packet in packets:
+            if len(packet) != 3:
+                raise ValueError("each packet must be (tms, tdi1, tdi2)")
+            tms, tdi1, tdi2 = packet
+            sequence.append(
+                ((int(tms) & 1) << 1) |
+                ((int(tdi1) & 1) << 2) |
+                ((int(tdi2) & 1) << 3)
+            )
+
+        if not sequence:
+            raise ValueError("packets must not be empty")
+
+        words = []
+        for start in range(0, len(sequence), 8):
+            chunk = sequence[start : start + 8]
+            word = 0
+            for index, packet in enumerate(chunk):
+                word |= packet << (index * 4)
+            if len(chunk) < 8:
+                word |= 0x1 << (len(chunk) * 4)
+            words.append(word)
+
+        return self.pio_packet_words_capture(words)
+
+    def pio_clock_square(self, duration_us):
+        self.release()
+        try:
+            return bool(sbw_native.pio_clock_square(self.hw, int(duration_us)))
+        finally:
+            self.release()
+
+    def pio_clock_data_square(self, duration_us):
+        self.release()
+        try:
+            return bool(sbw_native.pio_clock_data_square(self.hw, int(duration_us)))
+        finally:
+            self.release()
+
     def write_bytes(self, address, data):
         if not data:
             return True

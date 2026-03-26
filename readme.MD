@@ -63,6 +63,8 @@ That is about:
   MicroPython build and deployment notes.
 - [tools/build-mpy-native.ps1](D:/Github/pi-pico-sbw/tools/build-mpy-native.ps1)
   Windows helper to build the native `.mpy`.
+- [tools/deploy-native.ps1](D:/Github/pi-pico-sbw/tools/deploy-native.ps1)
+  Windows helper to copy `sbw_native.mpy` to the Pico and hard-fail if on-device `SHA-256` does not match the local file.
 - [status.md](D:/Github/pi-pico-sbw/status.md)
   Current project status and file-by-file handoff.
 
