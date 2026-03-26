@@ -13,14 +13,14 @@ The project is intentionally narrow. It is specialized for the exact target and 
 
 ## Current State
 
-The live, bench-validated path is the MicroPython path in [mpy](D:/Github/pi-pico-sbw/mpy).
+The live, bench-validated path is the MicroPython app at the repo root, backed by the native-module build area in [mpy](D:/Github/pi-pico-sbw/mpy).
 
 The repo now also contains the first production-oriented TSL programmer app:
 
-- local TI-TXT firmware asset: [tsl-calibre-msp.txt](D:/Github/pi-pico-sbw/mpy/tsl-calibre-msp.txt)
-- programming workflow: [program.py](D:/Github/pi-pico-sbw/mpy/program.py)
-- boot entrypoint: [main.py](D:/Github/pi-pico-sbw/mpy/main.py)
-- retained bench shell: [debug_shell.py](D:/Github/pi-pico-sbw/mpy/debug_shell.py)
+- local TI-TXT firmware asset: [tsl-calibre-msp.txt](D:/Github/pi-pico-sbw/tsl-calibre-msp.txt)
+- programming workflow: [program.py](D:/Github/pi-pico-sbw/program.py)
+- boot entrypoint: [main.py](D:/Github/pi-pico-sbw/main.py)
+- retained bench shell: [debug_shell.py](D:/Github/pi-pico-sbw/debug_shell.py)
 
 Latest verified hardware results on the wired target:
 
@@ -45,22 +45,24 @@ That is about:
 
 ## Repo Layout
 
-- [mpy/native/sbw_native.c](D:/Github/pi-pico-sbw/mpy/native/sbw_native.c)
+- [mpy/sbw_native.c](D:/Github/pi-pico-sbw/mpy/sbw_native.c)
   Native MicroPython module. Owns the `SBW` transport, `JTAG` sequencing, and general target memory read/write primitives. It does not own benchmark policy, smoke-test policy, or timing.
-- [mpy/sbw_config.py](D:/Github/pi-pico-sbw/mpy/sbw_config.py)
+- [mpy/SBW_NATIVE_API.md](D:/Github/pi-pico-sbw/mpy/SBW_NATIVE_API.md)
+  Reference for the public native-module API exposed to Python.
+- [sbw_config.py](D:/Github/pi-pico-sbw/sbw_config.py)
   Hardware constants, `RP2350` `SIO` MMIO addresses, regression constants, and the `150 MHz` clock setup/verification logic.
-- [mpy/sbw.py](D:/Github/pi-pico-sbw/mpy/sbw.py)
+- [sbw.py](D:/Github/pi-pico-sbw/sbw.py)
   Thin Python wrapper around the native module plus target power control and byte-level read/write helpers.
-- [mpy/program.py](D:/Github/pi-pico-sbw/mpy/program.py)
+- [program.py](D:/Github/pi-pico-sbw/program.py)
   Production TSL programming app. Loads the TI-TXT image, writes the timestamp and firmware blocks separately, verifies each block by readback, and power-cycles the target to run it briefly.
-- [mpy/main.py](D:/Github/pi-pico-sbw/mpy/main.py)
+- [main.py](D:/Github/pi-pico-sbw/main.py)
   Boot entrypoint for the production programmer loop.
-- [mpy/debug_shell.py](D:/Github/pi-pico-sbw/mpy/debug_shell.py)
+- [debug_shell.py](D:/Github/pi-pico-sbw/debug_shell.py)
   Interactive bench shell preserved from the earlier development workflow.
-- [mpy/testsuite.py](D:/Github/pi-pico-sbw/mpy/testsuite.py)
+- [testsuite.py](D:/Github/pi-pico-sbw/testsuite.py)
   Regression and Python-side benchmark entry points.
 - [mpy/README.md](D:/Github/pi-pico-sbw/mpy/README.md)
-  MicroPython build and deployment notes.
+  Native-module build and deployment notes.
 - [tools/build-mpy-native.ps1](D:/Github/pi-pico-sbw/tools/build-mpy-native.ps1)
   Windows helper to build the native `.mpy`.
 - [status.md](D:/Github/pi-pico-sbw/status.md)
@@ -121,14 +123,14 @@ python -m pip install --user pyelftools
 
 Then copy these files to the Pico running MicroPython:
 
-- `mpy/native/sbw_native.mpy`
-- `mpy/sbw_config.py`
-- `mpy/sbw.py`
-- `mpy/program.py`
-- `mpy/main.py`
-- `mpy/debug_shell.py`
-- `mpy/testsuite.py`
-- `mpy/tsl-calibre-msp.txt`
+- `mpy/sbw_native.mpy`
+- `sbw_config.py`
+- `sbw.py`
+- `program.py`
+- `main.py`
+- `debug_shell.py`
+- `testsuite.py`
+- `tsl-calibre-msp.txt`
 
 On boot, `main.py` now starts the production TSL programmer loop automatically.
 

@@ -53,39 +53,32 @@ Latest verified results:
 - [.gitignore](D:/Github/pi-pico-sbw/.gitignore)
   Ignore rules for local build outputs, caches, and temporary artifacts.
 
-### `mpy/`
+### Root App
 
-- [mpy/main.py](D:/Github/pi-pico-sbw/mpy/main.py)
+- [main.py](D:/Github/pi-pico-sbw/main.py)
   Boot entrypoint for the production TSL programming loop.
-- [mpy/program.py](D:/Github/pi-pico-sbw/mpy/program.py)
+- [program.py](D:/Github/pi-pico-sbw/program.py)
   Production TSL programmer. Loads `tsl-calibre-msp.txt`, writes the commissioning timestamp and firmware blocks separately, verifies each block by readback, then power-cycles the target to run it for 1 second.
-- [mpy/debug_shell.py](D:/Github/pi-pico-sbw/mpy/debug_shell.py)
+- [debug_shell.py](D:/Github/pi-pico-sbw/debug_shell.py)
   Preserved bench shell for low-level SBW/JTAG bring-up and diagnostics.
-- [mpy/sbw.py](D:/Github/pi-pico-sbw/mpy/sbw.py)
+- [sbw.py](D:/Github/pi-pico-sbw/sbw.py)
   Thin Python wrapper around the native module. Handles pin setup, target power switching, method forwarding into native C, the Python-side `mem_smoke16` helper, and byte-level read/write adapters built on the word-oriented native API.
-- [mpy/sbw_config.py](D:/Github/pi-pico-sbw/mpy/sbw_config.py)
+- [sbw_config.py](D:/Github/pi-pico-sbw/sbw_config.py)
   Hardware descriptor tuple, `RP2350` `SIO` MMIO addresses, pin assignments, regression constants, and the `150 MHz` clock setup/verification helper.
-- [mpy/testsuite.py](D:/Github/pi-pico-sbw/mpy/testsuite.py)
+- [testsuite.py](D:/Github/pi-pico-sbw/testsuite.py)
   Automated regression and Python-side benchmark entry points for the live MicroPython path.
-- [mpy/README.md](D:/Github/pi-pico-sbw/mpy/README.md)
-  Detailed build/deploy notes for the MicroPython path.
-- [mpy/tsl-calibre-msp.txt](D:/Github/pi-pico-sbw/mpy/tsl-calibre-msp.txt)
+- [tsl-calibre-msp.txt](D:/Github/pi-pico-sbw/tsl-calibre-msp.txt)
   TSL production firmware image in TI-TXT format.
 
-### `mpy/native/`
+### `mpy/`
 
-- [mpy/native/sbw_native.c](D:/Github/pi-pico-sbw/mpy/native/sbw_native.c)
-  The main implementation file. Contains:
-  - direct MMIO `SIO` GPIO access
-  - fixed cycle-counted `SBW` slot timing
-  - interrupt masking around critical low pulses
-  - active-session `SBWTDIO` ownership, with the line driven between logical bit cycles and only released for the `TDO` slot and explicit session boundaries
-  - `SBW` entry/release
-  - `JTAG` TAP reset and IR/DR shifting
-  - `SyncJtag_AssertPor` / `POR` flow
-  - general target memory read/write
-  It intentionally does not contain benchmark timing, smoke-test policy, or synthetic-pattern policy anymore.
-- [mpy/native/Makefile](D:/Github/pi-pico-sbw/mpy/native/Makefile)
+- [mpy/README.md](D:/Github/pi-pico-sbw/mpy/README.md)
+  Native-module build/deploy notes.
+- [mpy/SBW_NATIVE_API.md](D:/Github/pi-pico-sbw/mpy/SBW_NATIVE_API.md)
+  Public API reference for the native `sbw_native` module.
+- [mpy/sbw_native.c](D:/Github/pi-pico-sbw/mpy/sbw_native.c)
+  The main native implementation file. Contains the timing-critical SBW transport, JTAG sequencing, and general target memory read/write logic.
+- [mpy/Makefile](D:/Github/pi-pico-sbw/mpy/Makefile)
   Build rules for generating `sbw_native.mpy` using MicroPython `dynruntime.mk`.
 
 ### `tools/`
@@ -107,7 +100,7 @@ Latest verified results:
 - keep the native C path correct and self-contained
 - keep Python thin and policy-focused
 - preserve the `150 MHz` clock contract explicitly
-- optimize inside `mpy/native/sbw_native.c` if more throughput is needed
+- optimize inside `mpy/sbw_native.c` if more throughput is needed
 
 ## Known Caveats
 

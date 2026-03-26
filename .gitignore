@@ -1,6 +1,6 @@
 tmp/
 __pycache__/
 *.pyc
-mpy/native/build/
-mpy/native/*.mpy
-mpy/native/.mpy_ld_cache
+mpy/build/
+mpy/*.mpy
+mpy/.mpy_ld_cache

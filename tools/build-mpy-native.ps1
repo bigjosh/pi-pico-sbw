@@ -7,9 +7,9 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$nativeDir = Join-Path $repoRoot "mpy/native"
-$nativeDirPosix = "/" + (($nativeDir -replace "\\", "/") -replace ":", "")
+$mpyDir = Join-Path $repoRoot "mpy"
+$mpyDirPosix = "/" + (($mpyDir -replace "\\", "/") -replace ":", "")
 $pythonPosix = "/" + (($PythonExe -replace "\\", "/") -replace ":", "")
 $armBinPosix = "/" + (($ArmBinDir -replace "\\", "/") -replace ":", "")
 
-& $BashExe -lc "export PATH=${armBinPosix}:`$PATH; make -C $nativeDirPosix PYTHON=$pythonPosix"
+& $BashExe -lc "export PATH=${armBinPosix}:`$PATH; make -C $mpyDirPosix PYTHON=$pythonPosix"

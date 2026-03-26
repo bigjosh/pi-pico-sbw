@@ -1,18 +1,18 @@
 # Native API
 
-This folder contains the MicroPython native module source and build output for `sbw_native`.
+This file documents the MicroPython native module source and build output for `sbw_native`.
 
 This implements a bit-banged Spy-Bi-Wire driver. It must be in C to meet timing requirements. It does occasionally disable IRQs, but only for the very short SBWTCK low phases.
 
-The intended consumer is the Python layer in [sbw.py](D:/Github/pi-pico-sbw/mpy/sbw.py). This file documents the API that the Python side is allowed to rely on.
+The intended consumer is the Python layer in [sbw.py](D:/Github/pi-pico-sbw/sbw.py). This file documents the API that the Python side is allowed to rely on.
 
 During an active SBW/JTAG session, the native transport keeps `SBWTDIO` actively driven between logical bit cycles. It only releases the line for the `TDO` slot itself and for explicit session-boundary handling such as `release`/entry.
 
 ## Module Name
 
 - import name: `sbw_native`
-- build artifact: [sbw_native.mpy](D:/Github/pi-pico-sbw/mpy/native/sbw_native.mpy)
-- implementation: [sbw_native.c](D:/Github/pi-pico-sbw/mpy/native/sbw_native.c)
+- build artifact: [sbw_native.mpy](D:/Github/pi-pico-sbw/mpy/sbw_native.mpy)
+- implementation: [sbw_native.c](D:/Github/pi-pico-sbw/mpy/sbw_native.c)
 
 ## Hardware Descriptor
 
@@ -48,7 +48,7 @@ Constraints:
 - `clock_mask` and `data_mask` must be non-zero
 - power control is not part of the native tuple; Python owns target power switching
 
-The canonical tuple definition lives in [sbw_config.py](D:/Github/pi-pico-sbw/mpy/sbw_config.py).
+The canonical tuple definition lives in [sbw_config.py](D:/Github/pi-pico-sbw/sbw_config.py).
 
 ## Exported Constants
 
@@ -186,7 +186,7 @@ The actual safety requirement is:
 
 If the MCU is clocked faster than `SYS_CLK_HZ`, the delay loops in the native module get shorter in real time and can violate `SBW` timing minimums. Running slower than `SYS_CLK_HZ` is timing-safe, but slower overall.
 
-The caller must enforce this before calling the native API. The current enforcement lives in [sbw_config.py](D:/Github/pi-pico-sbw/mpy/sbw_config.py) and is called by [sbw.py](D:/Github/pi-pico-sbw/mpy/sbw.py).
+The caller must enforce this before calling the native API. The current enforcement lives in [sbw_config.py](D:/Github/pi-pico-sbw/sbw_config.py) and is called by [sbw.py](D:/Github/pi-pico-sbw/sbw.py).
 
 Example:
 

@@ -1,4 +1,4 @@
-MPY_DIR ?= ../../../micropython-tmp
+MPY_DIR ?= ../../micropython-tmp
 
 MOD = sbw_native
 SRC = sbw_native.c
