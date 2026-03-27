@@ -41,8 +41,8 @@ enum {
 #define SBW_NS_TO_CYCLES(ns) ((uint32_t)((((uint64_t)SBW_SYS_CLK_HZ) * (uint64_t)(ns) + 999999999ull) / 1000000000ull))
 
 enum {
-    SBW_ACTIVE_SLOT_LOW_CYCLES = SBW_NS_TO_CYCLES(50),
-    SBW_ACTIVE_SLOT_HIGH_CYCLES = 0,
+    SBW_ACTIVE_SLOT_LOW_CYCLES = SBW_NS_TO_CYCLES(20),  // Total should be >=50ns
+    SBW_ACTIVE_SLOT_HIGH_CYCLES = 0,                    // Total should be >=50ns
     SBW_EXIT_HOLD_CYCLES = SBW_NS_TO_CYCLES(200000),
     SBW_ENTRY_RST_HIGH_TEST_RESET_CYCLES = 4u * SBW_CYCLES_PER_MS,
     SBW_ENTRY_RST_HIGH_TEST_ENABLE_CYCLES = 20u * SBW_CYCLES_PER_MS,
@@ -250,49 +250,56 @@ static void sbw_start_mode(sbw_ctx_t *ctx, bool rst_low) {
     ctx->tclk_high = true;
 }
 
+#define SBW_IO_CACHE_FROM_CTX(ctx) \
+    volatile uint32_t *const gpio_in = (ctx)->hw.gpio_in; \
+    volatile uint32_t *const gpio_out_set = (ctx)->hw.gpio_out_set; \
+    volatile uint32_t *const gpio_out_clr = (ctx)->hw.gpio_out_clr; \
+    volatile uint32_t *const gpio_oe_clr = (ctx)->hw.gpio_oe_clr; \
+    volatile uint32_t *const gpio_oe_set = (ctx)->hw.gpio_oe_set; \
+    const uint32_t clock_mask = (ctx)->hw.clock_mask; \
+    const uint32_t data_mask = (ctx)->hw.data_mask
+
+#define SBW_IO_BIT_BODY(tdo_out, tms_value, tdi_value) \
+    do { \
+        sbw_mmio_write((tms_value) ? gpio_out_set : gpio_out_clr, data_mask); \
+        sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES); \
+        sbw_irq_disable(); \
+        sbw_mmio_write(gpio_out_clr, clock_mask); \
+        sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES); \
+        sbw_mmio_write(gpio_out_set, clock_mask); \
+        sbw_irq_enable(); \
+        sbw_mmio_write((tdi_value) ? gpio_out_set : gpio_out_clr, data_mask); \
+        sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES); \
+        sbw_irq_disable(); \
+        sbw_mmio_write(gpio_out_clr, clock_mask); \
+        sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES); \
+        sbw_mmio_write(gpio_out_set, clock_mask); \
+        sbw_irq_enable(); \
+        sbw_mmio_write(gpio_oe_clr, data_mask); \
+        sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES); \
+        sbw_irq_disable(); \
+        sbw_mmio_write(gpio_out_clr, clock_mask); \
+        sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES); \
+        (tdo_out) = (sbw_mmio_read(gpio_in) & data_mask) != 0; \
+        sbw_mmio_write(gpio_out_set, clock_mask); \
+        sbw_mmio_write(gpio_oe_set, data_mask); \
+        sbw_irq_enable(); \
+    } while (0)
+
 static inline bool sbw_io_bit(sbw_ctx_t *ctx, bool tms, bool tdi) {
-    volatile uint32_t *const gpio_in = ctx->hw.gpio_in;
-    volatile uint32_t *const gpio_out_set = ctx->hw.gpio_out_set;
-    volatile uint32_t *const gpio_out_clr = ctx->hw.gpio_out_clr;
-    volatile uint32_t *const gpio_oe_clr = ctx->hw.gpio_oe_clr;
-    volatile uint32_t *const gpio_oe_set = ctx->hw.gpio_oe_set;
-    const uint32_t clock_mask = ctx->hw.clock_mask;
-    const uint32_t data_mask = ctx->hw.data_mask;
+    SBW_IO_CACHE_FROM_CTX(ctx);
+    bool tdo = false;
 
     // One logical SBW bit is three clocked sub-slots on SBWTDIO: drive TMS, drive TDI, then
     // release the line so the target can return TDO on the third low pulse.
     // Active-session callers keep SBWTDIO driven between logical bits, so this sequence starts
     // with the master already owning the bus.
     // Slot 1: present TMS while we still own SBWTDIO.
-    sbw_mmio_write(tms ? gpio_out_set : gpio_out_clr, data_mask);
-    sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
-    sbw_irq_disable();
-    sbw_mmio_write(gpio_out_clr, clock_mask);
-    sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES);
-    sbw_mmio_write(gpio_out_set, clock_mask);
-    sbw_irq_enable();
-
     // Slot 2: present TDI. In Run-Test/Idle this slot also carries TCLK state.
-    sbw_mmio_write(tdi ? gpio_out_set : gpio_out_clr, data_mask);
-    sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
-    sbw_irq_disable();
-    sbw_mmio_write(gpio_out_clr, clock_mask);
-    sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES);
-    sbw_mmio_write(gpio_out_set, clock_mask);
-    sbw_irq_enable();
-
     // Slot 3: release SBWTDIO before the falling edge so the target can drive TDO.
     // Once SBWTCK returns high, the target should have released the line, so we can
     // immediately take ownership again instead of leaving the bus floating between bits.
-    sbw_mmio_write(gpio_oe_clr, data_mask);
-    sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
-    sbw_irq_disable();
-    sbw_mmio_write(gpio_out_clr, clock_mask);
-    sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES);
-    const bool tdo = (sbw_mmio_read(gpio_in) & data_mask) != 0;
-    sbw_mmio_write(gpio_out_set, clock_mask);
-    sbw_mmio_write(gpio_oe_set, data_mask);
-    sbw_irq_enable();
+    SBW_IO_BIT_BODY(tdo, tms, tdi);
     return tdo;
 }
 
@@ -405,34 +412,59 @@ static uint8_t sbw_shift_ir8_capture(sbw_ctx_t *ctx, uint8_t instruction) {
     return captured;
 }
 
-static void sbw_shift_dr16_no_capture(sbw_ctx_t *ctx, uint16_t data) {
-    uint16_t shift = data;
+inline static void sbw_shift_dr16_no_capture(sbw_ctx_t *ctx, uint16_t data) {
+    SBW_IO_CACHE_FROM_CTX(ctx);
+    const bool tclk_high = ctx->tclk_high;
+    bool ignored_tdo;
 
-    sbw_go_to_shift_dr(ctx);
+    SBW_IO_BIT_BODY(ignored_tdo, true, tclk_high);
+    SBW_IO_BIT_BODY(ignored_tdo, false, true);
+    SBW_IO_BIT_BODY(ignored_tdo, false, true);
 
-    for (uint32_t bit = 0; bit < 15; ++bit) {
-        sbw_io_bit(ctx, false, (shift & 0x8000u) != 0);
-        shift <<= 1;
-    }
+    SBW_IO_BIT_BODY(ignored_tdo, false, (data & 0x8000u) != 0);
+    SBW_IO_BIT_BODY(ignored_tdo, false, (data & 0x4000u) != 0);
+    SBW_IO_BIT_BODY(ignored_tdo, false, (data & 0x2000u) != 0);
+    SBW_IO_BIT_BODY(ignored_tdo, false, (data & 0x1000u) != 0);
+    SBW_IO_BIT_BODY(ignored_tdo, false, (data & 0x0800u) != 0);
+    SBW_IO_BIT_BODY(ignored_tdo, false, (data & 0x0400u) != 0);
+    SBW_IO_BIT_BODY(ignored_tdo, false, (data & 0x0200u) != 0);
+    SBW_IO_BIT_BODY(ignored_tdo, false, (data & 0x0100u) != 0);
+    SBW_IO_BIT_BODY(ignored_tdo, false, (data & 0x0080u) != 0);
+    SBW_IO_BIT_BODY(ignored_tdo, false, (data & 0x0040u) != 0);
+    SBW_IO_BIT_BODY(ignored_tdo, false, (data & 0x0020u) != 0);
+    SBW_IO_BIT_BODY(ignored_tdo, false, (data & 0x0010u) != 0);
+    SBW_IO_BIT_BODY(ignored_tdo, false, (data & 0x0008u) != 0);
+    SBW_IO_BIT_BODY(ignored_tdo, false, (data & 0x0004u) != 0);
+    SBW_IO_BIT_BODY(ignored_tdo, false, (data & 0x0002u) != 0);
+    SBW_IO_BIT_BODY(ignored_tdo, true , (data & 0x0001u) != 0);
 
-    sbw_io_bit(ctx, true, (shift & 0x8000u) != 0);
-    sbw_finish_shift(ctx);
+    SBW_IO_BIT_BODY(ignored_tdo, true, true);
+    SBW_IO_BIT_BODY(ignored_tdo, false, tclk_high);
+    (void)ignored_tdo;
 }
 
 static uint16_t sbw_shift_dr16_capture(sbw_ctx_t *ctx, uint16_t data) {
+    SBW_IO_CACHE_FROM_CTX(ctx);
+    const bool tclk_high = ctx->tclk_high;
     uint16_t captured = 0;
     uint16_t shift = data;
+    bool tdo = false;
 
-    sbw_go_to_shift_dr(ctx);
+    SBW_IO_BIT_BODY(tdo, true, tclk_high);
+    SBW_IO_BIT_BODY(tdo, false, true);
+    SBW_IO_BIT_BODY(tdo, false, true);
 
     for (uint32_t bit = 0; bit < 15; ++bit) {
         const bool tdi = (shift & 0x8000u) != 0;
-        captured = (uint16_t)((captured << 1) | (sbw_io_bit(ctx, false, tdi) ? 1u : 0u));
+        SBW_IO_BIT_BODY(tdo, false, tdi);
+        captured = (uint16_t)((captured << 1) | (tdo ? 1u : 0u));
         shift <<= 1;
     }
 
-    captured = (uint16_t)((captured << 1) | (sbw_io_bit(ctx, true, (shift & 0x8000u) != 0) ? 1u : 0u));
-    sbw_finish_shift(ctx);
+    SBW_IO_BIT_BODY(tdo, true, (shift & 0x8000u) != 0);
+    captured = (uint16_t)((captured << 1) | (tdo ? 1u : 0u));
+    SBW_IO_BIT_BODY(tdo, true, true);
+    SBW_IO_BIT_BODY(tdo, false, tclk_high);
     return captured;
 }
 
@@ -752,11 +784,6 @@ static inline uint16_t sbw_read_block16_quick_word(sbw_ctx_t *ctx) {
     return value;
 }
 
-static bool sbw_finish_read_block16_quick_430xv2(sbw_ctx_t *ctx) {
-    (void)ctx;
-    return true;
-}
-
 static bool sbw_read_block16_internal(sbw_ctx_t *ctx, uint32_t address, uint16_t *data, size_t word_count) {
     if (!sbw_in_full_emulation(ctx, NULL)) {
         return false;
@@ -774,7 +801,7 @@ static bool sbw_read_block16_internal(sbw_ctx_t *ctx, uint32_t address, uint16_t
         data[index] = sbw_read_block16_quick_word(ctx);
     }
 
-    return sbw_finish_read_block16_quick_430xv2(ctx);
+    return true;
 }
 
 static bool sbw_begin_write_block16_quick_430xv2(sbw_ctx_t *ctx, uint32_t address) {
@@ -978,7 +1005,7 @@ static mp_obj_t sbw_native_read_mem16(mp_obj_t hw_in, mp_obj_t address_in) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_2(sbw_native_read_mem16_obj, sbw_native_read_mem16);
 
-static mp_obj_t sbw_native_read_block_common(mp_obj_t hw_in, mp_obj_t address_in, mp_obj_t words_in) {
+static mp_obj_t sbw_native_read_block16(mp_obj_t hw_in, mp_obj_t address_in, mp_obj_t words_in) {
     sbw_hw_desc_t hw;
     sbw_ctx_t ctx;
     const uint32_t address = (uint32_t)mp_obj_get_int_truncated(address_in);
@@ -1007,10 +1034,6 @@ static mp_obj_t sbw_native_read_block_common(mp_obj_t hw_in, mp_obj_t address_in
         m_free(buffer);
     }
     return result;
-}
-
-static mp_obj_t sbw_native_read_block16(mp_obj_t hw_in, mp_obj_t address_in, mp_obj_t words_in) {
-    return sbw_native_read_block_common(hw_in, address_in, words_in);
 }
 static MP_DEFINE_CONST_FUN_OBJ_3(sbw_native_read_block16_obj, sbw_native_read_block16);
 
