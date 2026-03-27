@@ -3,6 +3,9 @@
 This directory now contains only the native-module source, build metadata, and
 generated `.mpy` output used by the MicroPython app at the repo root.
 
+For the full scratch-build handoff, including prerequisite installs and manual
+build fallback steps, see [build.md](D:/Github/pi-pico-sbw/mpy/build.md).
+
 Contents:
 
 - `sbw_native.c`: native SBW/JTAG implementation
