@@ -500,6 +500,41 @@ class SBWNative:
             return True
         return self._write_syscfg0_low(saved)
 
+    # -- DMA block transfer --
+
+    def _dma_transfer(self, fifo_tx, word_count, capture_rx=False):
+        """Fire-and-forget DMA: TX feeds PIO, RX drains it.
+
+        Returns the RX buffer (array of raw ISR words) if capture_rx,
+        otherwise None.  RX DMA completion signals all words processed.
+        """
+        import rp2, array
+        PIO0_TXF0 = 0x50200010
+        PIO0_RXF0 = 0x50200020
+
+        rx_buf = array.array("I", (0 for _ in range(word_count)))
+
+        dma_tx = rp2.DMA()
+        dma_rx = rp2.DMA()
+        try:
+            ctrl_tx = dma_tx.pack_ctrl(treq_sel=0, size=2,
+                                       inc_read=True, inc_write=False)
+            ctrl_rx = dma_rx.pack_ctrl(treq_sel=4, size=2,
+                                       inc_read=False, inc_write=True)
+
+            dma_rx.config(read=PIO0_RXF0, write=rx_buf,
+                         count=word_count, ctrl=ctrl_rx, trigger=True)
+            dma_tx.config(read=fifo_tx, write=PIO0_TXF0,
+                         count=len(fifo_tx), ctrl=ctrl_tx, trigger=True)
+
+            while dma_rx.active():
+                pass
+        finally:
+            dma_tx.close()
+            dma_rx.close()
+
+        return rx_buf if capture_rx else None
+
     # -- Block operations --
 
     def _begin_read_block_quick(self, address):
@@ -687,12 +722,20 @@ class SBWNative:
             if cpu_ok:
                 fe_ok, _ = self._in_full_emulation()
                 if fe_ok and self._begin_read_block_quick(address):
+                    import array
+                    # Replicate per-word template using list multiply (fast)
+                    fifo_tx = array.array("I", list(self._qr_words) * words)
+                    rx_buf = self._dma_transfer(fifo_tx, words, capture_rx=True)
                     buf = bytearray(words * 2)
+                    tot = self._qr_total
+                    ds = self._qr_dr_start
+                    dc = self._qr_dr_count
                     for i in range(words):
-                        w = self._read_block_quick_word()
+                        w = _extract_tdo(rx_buf[i], tot, ds, dc)
                         buf[i * 2] = w & 0xFF
                         buf[i * 2 + 1] = (w >> 8) & 0xFF
                     result = bytes(buf)
+                    self._tclk_high = True
                     ok = True
             self._end_session()
             if ok:
@@ -743,14 +786,7 @@ class SBWNative:
                                     fifo[idx] = w0
                                     fifo[idx + 1] = w1
                                     fifo[idx + 2] = w2
-                                # Tight loop: push 3 TX words, drain 1 RX per word
-                                sm = self._transport._sm
-                                for i in range(word_count):
-                                    idx = i * 3
-                                    sm.put(fifo[idx])
-                                    sm.put(fifo[idx + 1])
-                                    sm.put(fifo[idx + 2])
-                                    sm.get()
+                                self._dma_transfer(fifo, word_count)
                                 self._tclk_high = True
                                 write_ok = self._finish_write_block_quick()
                             else:
