@@ -511,13 +511,25 @@ class SBWNative:
         self._shift_ir8(_IR_ADDR_CAPTURE)
         self._shift_ir8(_IR_DATA_QUICK)
         self._tclk_set(True)
+
+        # Pre-compute the per-word FIFO template (same for every word)
+        recs = _pack_tclk_set(False, True)  # ClrTCLK (TMSLDH)
+        recs[-1] &= ~0x8
+        dr_recs, ds, dc = _pack_shift_dr16(0x0000, False, capture=True)
+        self._qr_dr_start = len(recs) + ds
+        self._qr_dr_count = dc
+        recs.extend(dr_recs)
+        recs[-1] &= ~0x8
+        recs.extend(_pack_tclk_set(True, False))  # SetTCLK
+        self._qr_total = len(recs)
+        self._qr_words = _records_to_words(recs)
         return True
 
     def _read_block_quick_word(self):
-        self._tclk_set(False)
-        value = self._shift_dr16_capture(0x0000)
-        self._tclk_set(True)
-        return value
+        """Read one word via quick path, using pre-computed FIFO template."""
+        rx = self._transport.execute(self._qr_words)
+        self._tclk_high = True
+        return _extract_tdo(rx, self._qr_total, self._qr_dr_start, self._qr_dr_count)
 
     def _begin_write_block_quick(self, address):
         if not self._set_pc((address - 2) & 0x000FFFFF):
@@ -532,12 +544,43 @@ class SBWNative:
         self._shift_dr16(0x1111)  # prime pipeline
         self._tclk_set(False)
         self._tclk_set(True)
+
+        # Pre-compute write template with all data TDI bits = 0.
+        # We compute masks to scatter 16 data bits into the FIFO words.
+        recs = _pack_shift_dr16(0x0000, True, capture=False)
+        recs[-1] &= ~0x8
+        recs.extend(_pack_tclk_set(False, True))  # ClrTCLK TMSLDH
+        recs[-1] &= ~0x8
+        recs.extend(_pack_tclk_set(True, False))  # SetTCLK
+        base = _records_to_words(recs)
+        self._qw_base = (base[0], base[1], base[2])
+
+        # Build scatter masks: for each data bit (MSB first), which
+        # FIFO word and bit position it maps to.
+        # Data bit N → record index 3+N → TDI at bit ((rec%8)*4)+2
+        self._qw_masks = [[], [], []]
+        for n in range(16):
+            ri = 3 + n
+            wi = ri >> 3
+            bp = ((ri & 7) << 2) + 2
+            self._qw_masks[wi].append((15 - n, bp))  # (src_bit, dst_bit)
         return True
 
     def _write_block_quick_word(self, data):
-        self._shift_dr16(data)
-        self._tclk_set(False)
-        self._tclk_set(True)
+        """Write one word via quick path, scattering data bits directly."""
+        w0, w1, w2 = self._qw_base
+        d = data & 0xFFFF
+        for sb, db in self._qw_masks[0]:
+            if d & (1 << sb):
+                w0 |= (1 << db)
+        for sb, db in self._qw_masks[1]:
+            if d & (1 << sb):
+                w1 |= (1 << db)
+        for sb, db in self._qw_masks[2]:
+            if d & (1 << sb):
+                w2 |= (1 << db)
+        self._transport.execute_no_capture((w0, w1, w2))
+        self._tclk_high = True
 
     def _finish_write_block_quick(self):
         self._shift_ir8(_IR_CNTRL_SIG_16BIT)
