@@ -727,9 +727,31 @@ class SBWNative:
                             write_ok, _ = self._in_full_emulation()
                         else:
                             if self._begin_write_block_quick(address):
+                                # Pre-compute ALL FIFO words, then tight loop
+                                import array
+                                fifo = array.array("I", (0 for _ in range(word_count * 3)))
                                 for i in range(word_count):
-                                    w = data[i * 2] | (data[i * 2 + 1] << 8)
-                                    self._write_block_quick_word(w)
+                                    d = data[i * 2] | (data[i * 2 + 1] << 8)
+                                    w0, w1, w2 = self._qw_base
+                                    for sb, db in self._qw_masks[0]:
+                                        if d & (1 << sb): w0 |= 1 << db
+                                    for sb, db in self._qw_masks[1]:
+                                        if d & (1 << sb): w1 |= 1 << db
+                                    for sb, db in self._qw_masks[2]:
+                                        if d & (1 << sb): w2 |= 1 << db
+                                    idx = i * 3
+                                    fifo[idx] = w0
+                                    fifo[idx + 1] = w1
+                                    fifo[idx + 2] = w2
+                                # Tight loop: push 3 TX words, drain 1 RX per word
+                                sm = self._transport._sm
+                                for i in range(word_count):
+                                    idx = i * 3
+                                    sm.put(fifo[idx])
+                                    sm.put(fifo[idx + 1])
+                                    sm.put(fifo[idx + 2])
+                                    sm.get()
+                                self._tclk_high = True
                                 write_ok = self._finish_write_block_quick()
                             else:
                                 write_ok = False
