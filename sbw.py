@@ -1,19 +1,22 @@
 """SBW/JTAG protocol layer using PIO transport.
 
 All JTAG operations are built from packed 4-bit records sent to the PIO
-state machine. The PIO drives SBWTCK/SBWTDIO at 10 MHz autonomously
-between Python interactions.
+state machine. The PIO drives SBWTCK/SBWTDIO autonomously between
+Python interactions.
 
-Record format (4 bits, LSB first in FIFO word):
-  bit 0: TMS
-  bit 1: TDI
-  bit 2: TMSLDH
+Record format (4 bits per SBW bit, shift-right from OSR):
+  bit 0: TMSLDH  (consumed first by PIO)
+  bit 1: TMS
+  bit 2: TDI
   bit 3: DONE
 """
 
+import array
+import rp2
 import time
 
 import machine
+from micropython import const
 
 from sbw_config import (
     BYPASS_EXPECTED,
@@ -22,9 +25,9 @@ from sbw_config import (
     GPIO_OE_CLR_ADDR,
     GPIO_OE_SET_ADDR,
     GPIO_OUT_SET_ADDR,
+    JTAG_ID_EXPECTED,
     POWER_MASK,
     SBW_PIN_TARGET_POWER,
-    SBW_SYS_CLK_HZ,
     SBW_TARGET_POWER_SETTLE_MS,
     ensure_system_clock,
 )
@@ -41,7 +44,6 @@ _IR_ADDR_CAPTURE = const(0x84)
 _IR_DATA_TO_ADDR = const(0x85)
 _IR_BYPASS = const(0xFF)
 
-_JTAG_ID_EXPECTED = const(0x98)
 _JTAG_SYNC_RETRIES = const(50)
 _JTAG_SYNC_MASK = const(0x0200)
 _JTAG_ATTEMPTS = const(3)
@@ -59,6 +61,9 @@ _INFO_FRAM_START = const(0x1800)
 _INFO_FRAM_END = const(0x19FF)
 _MAIN_FRAM_START = const(0xC400)
 _MAIN_FRAM_END = const(0xFFFF)
+
+_PIO0_TXF0 = const(0x50200010)
+_PIO0_RXF0 = const(0x50200020)
 
 
 # ---------------------------------------------------------------------------
@@ -82,12 +87,11 @@ def _records_to_words(records):
     words = []
     word = 0
     for i, r in enumerate(records):
-        pos = (i & 7) << 2  # bit position within the word
+        pos = (i & 7) << 2
         word |= (r & 0xF) << pos
         if (i & 7) == 7:
             words.append(word)
             word = 0
-    # Flush partial last word (padding bits after DONE are zero = harmless)
     if len(records) & 7:
         words.append(word)
     return words
@@ -100,27 +104,27 @@ def _records_to_words(records):
 def _go_to_shift_ir(tclk_high):
     """4 records: Run-Test/Idle -> Shift-IR."""
     return [
-        _rec(1, 1 if tclk_high else 0),  # Select-DR-Scan
-        _rec(1, 1),                       # Select-IR-Scan
-        _rec(0, 1),                       # Capture-IR
-        _rec(0, 1),                       # Shift-IR
+        _rec(1, 1 if tclk_high else 0),
+        _rec(1, 1),
+        _rec(0, 1),
+        _rec(0, 1),
     ]
 
 
 def _go_to_shift_dr(tclk_high):
     """3 records: Run-Test/Idle -> Shift-DR."""
     return [
-        _rec(1, 1 if tclk_high else 0),  # Select-DR-Scan
-        _rec(0, 1),                       # Capture-DR
-        _rec(0, 1),                       # Shift-DR
+        _rec(1, 1 if tclk_high else 0),
+        _rec(0, 1),
+        _rec(0, 1),
     ]
 
 
 def _finish_shift(tclk_high):
     """2 records: Exit-Shift -> Run-Test/Idle."""
     return [
-        _rec(1, 1),                       # Exit1 -> Update (TDI=1 per C reference)
-        _rec(0, 1 if tclk_high else 0),   # Update -> RTI
+        _rec(1, 1),
+        _rec(0, 1 if tclk_high else 0),
     ]
 
 
@@ -132,11 +136,7 @@ def _pack_tap_reset():
 
 
 def _pack_shift_ir8(ir, tclk_high, capture=False):
-    """14 records: go_to_shift_ir + 8-bit LSB-first shift + finish_shift.
-
-    Returns (records, data_start, data_count) if capture, else records.
-    data_start/data_count identify which TDO bits carry the IR capture.
-    """
+    """14 records: go_to_shift_ir + 8-bit LSB-first shift + finish_shift."""
     recs = _go_to_shift_ir(tclk_high)
     data_start = len(recs)
 
@@ -144,10 +144,10 @@ def _pack_shift_ir8(ir, tclk_high, capture=False):
     for bit in range(7):
         recs.append(_rec(0, shift & 1))
         shift >>= 1
-    recs.append(_rec(1, shift & 1))  # last bit, TMS=1 -> exit
+    recs.append(_rec(1, shift & 1))
 
     recs.extend(_finish_shift(tclk_high))
-    recs[-1] |= 0x8  # set DONE on last record
+    recs[-1] |= 0x8
     if capture:
         return recs, data_start, 8
     return recs
@@ -196,8 +196,6 @@ def _extract_tdo(rx_word, total_records, data_start, data_count):
     """Extract captured TDO bits from an RX word.
 
     With ISR shift-left: first TDO at bit (total_records - 1), last at bit 0.
-    The data bits span positions [total_records - 1 - data_start] down to
-    [total_records - data_start - data_count].
     """
     shift = total_records - data_start - data_count
     return (rx_word >> shift) & ((1 << data_count) - 1)
@@ -255,42 +253,36 @@ class SBWNative:
         self._tclk_high = True
 
     def _tap_reset(self):
-        recs = _pack_tap_reset()
-        self._transport.execute_no_capture(_records_to_words(recs))
+        self._transport.execute_no_capture(_records_to_words(_pack_tap_reset()))
 
     def _tclk_set(self, high):
-        recs = _pack_tclk_set(high, self._tclk_high)
-        self._transport.execute_no_capture(_records_to_words(recs))
+        self._transport.execute_no_capture(
+            _records_to_words(_pack_tclk_set(high, self._tclk_high)))
         self._tclk_high = high
 
     def _shift_ir8(self, ir):
-        """Shift 8-bit IR, no capture."""
-        recs = _pack_shift_ir8(ir, self._tclk_high, capture=False)
-        self._transport.execute_no_capture(_records_to_words(recs))
+        self._transport.execute_no_capture(
+            _records_to_words(_pack_shift_ir8(ir, self._tclk_high)))
 
     def _shift_ir8_capture(self, ir):
-        """Shift 8-bit IR, capture TDO."""
         recs, ds, dc = _pack_shift_ir8(ir, self._tclk_high, capture=True)
         total = len(recs)
         rx = self._transport.execute(_records_to_words(recs))
         return _extract_tdo(rx, total, ds, dc)
 
     def _shift_dr16(self, data):
-        """Shift 16-bit DR, no capture."""
-        recs = _pack_shift_dr16(data, self._tclk_high, capture=False)
-        self._transport.execute_no_capture(_records_to_words(recs))
+        self._transport.execute_no_capture(
+            _records_to_words(_pack_shift_dr16(data, self._tclk_high)))
 
     def _shift_dr16_capture(self, data):
-        """Shift 16-bit DR, capture TDO."""
         recs, ds, dc = _pack_shift_dr16(data, self._tclk_high, capture=True)
         total = len(recs)
         rx = self._transport.execute(_records_to_words(recs))
         return _extract_tdo(rx, total, ds, dc)
 
     def _shift_dr20(self, data):
-        """Shift 20-bit DR, no capture."""
-        recs = _pack_shift_dr20(data, self._tclk_high)
-        self._transport.execute_no_capture(_records_to_words(recs))
+        self._transport.execute_no_capture(
+            _records_to_words(_pack_shift_dr20(data, self._tclk_high)))
 
     # -- JTAG protocol operations --
 
@@ -306,7 +298,7 @@ class SBWNative:
         self._shift_ir8(_IR_CNTRL_SIG_16BIT)
         self._shift_dr16(0x1501)
 
-        if self._shift_ir8_capture(_IR_CNTRL_SIG_CAPTURE) != _JTAG_ID_EXPECTED:
+        if self._shift_ir8_capture(_IR_CNTRL_SIG_CAPTURE) != JTAG_ID_EXPECTED:
             return False
 
         for _ in range(_JTAG_SYNC_RETRIES):
@@ -354,14 +346,11 @@ class SBWNative:
     def _prepare_cpu(self):
         if not self._sync_cpu():
             return False, 0
-
         ok, status = self._execute_por()
         if not ok:
             return False, status
-
         if not self._disable_watchdog():
             return False, status
-
         return True, status
 
     # -- Memory operations --
@@ -372,11 +361,9 @@ class SBWNative:
         self._shift_dr16(0x0500)
         self._shift_ir8(_IR_ADDR_16BIT)
         self._shift_dr20(address & 0x000FFFFF)
-
         self._tclk_set(True)
         self._shift_ir8(_IR_DATA_TO_ADDR)
         self._shift_dr16(data)
-
         self._tclk_set(False)
         self._shift_ir8(_IR_CNTRL_SIG_16BIT)
         self._shift_dr16(0x0501)
@@ -388,7 +375,6 @@ class SBWNative:
         ok, _ = self._in_full_emulation()
         if not ok:
             return False, 0
-
         self._tclk_set(False)
         self._shift_ir8(_IR_CNTRL_SIG_16BIT)
         self._shift_dr16(0x0501)
@@ -397,13 +383,10 @@ class SBWNative:
         self._shift_ir8(_IR_DATA_TO_ADDR)
         self._tclk_set(True)
         self._tclk_set(False)
-
         value = self._shift_dr16_capture(0x0000)
-
         self._tclk_set(True)
         self._tclk_set(False)
         self._tclk_set(True)
-
         ok, _ = self._in_full_emulation()
         return ok, value
 
@@ -411,7 +394,6 @@ class SBWNative:
         ok, _ = self._in_full_emulation()
         if not ok:
             return False
-
         self._write_mem16_sequence(address, value)
         ok, _ = self._in_full_emulation()
         return ok
@@ -474,25 +456,20 @@ class SBWNative:
 
     def _write_syscfg0_low(self, low_bits):
         return self._write_mem16_internal(
-            _SYSCFG0_ADDR, _SYSCFG0_PASSWORD | (low_bits & 0xFF)
-        )
+            _SYSCFG0_ADDR, _SYSCFG0_PASSWORD | (low_bits & 0xFF))
 
     def _unlock_fram(self, address):
         prot = self._fram_protection_mask(address)
         if prot == 0:
             return True, 0, False
-
         ok, syscfg0 = self._read_mem16_internal(_SYSCFG0_ADDR)
         if not ok:
             return False, 0, False
-
         saved = syscfg0 & 0xFF
         if (saved & prot) == 0:
             return True, saved, False
-
         if not self._write_syscfg0_low(saved & ~prot):
             return False, saved, False
-
         return True, saved, True
 
     def _restore_fram(self, saved, changed):
@@ -505,13 +482,9 @@ class SBWNative:
     def _dma_transfer(self, fifo_tx, word_count, capture_rx=False):
         """Fire-and-forget DMA: TX feeds PIO, RX drains it.
 
-        Returns the RX buffer (array of raw ISR words) if capture_rx,
-        otherwise None.  RX DMA completion signals all words processed.
+        RX DMA completion signals all words have been processed.
+        Returns the RX buffer (array of raw ISR words) if capture_rx.
         """
-        import rp2, array
-        PIO0_TXF0 = 0x50200010
-        PIO0_RXF0 = 0x50200020
-
         rx_buf = array.array("I", (0 for _ in range(word_count)))
 
         dma_tx = rp2.DMA()
@@ -521,12 +494,10 @@ class SBWNative:
                                        inc_read=True, inc_write=False)
             ctrl_rx = dma_rx.pack_ctrl(treq_sel=4, size=2,
                                        inc_read=False, inc_write=True)
-
-            dma_rx.config(read=PIO0_RXF0, write=rx_buf,
+            dma_rx.config(read=_PIO0_RXF0, write=rx_buf,
                          count=word_count, ctrl=ctrl_rx, trigger=True)
-            dma_tx.config(read=fifo_tx, write=PIO0_TXF0,
+            dma_tx.config(read=fifo_tx, write=_PIO0_TXF0,
                          count=len(fifo_tx), ctrl=ctrl_tx, trigger=True)
-
             while dma_rx.active():
                 pass
         finally:
@@ -535,7 +506,7 @@ class SBWNative:
 
         return rx_buf if capture_rx else None
 
-    # -- Block operations --
+    # -- Block quick-path setup --
 
     def _begin_read_block_quick(self, address):
         if not self._set_pc(address):
@@ -547,24 +518,18 @@ class SBWNative:
         self._shift_ir8(_IR_DATA_QUICK)
         self._tclk_set(True)
 
-        # Pre-compute the per-word FIFO template (same for every word)
-        recs = _pack_tclk_set(False, True)  # ClrTCLK (TMSLDH)
+        # Pre-compute per-word FIFO template (same for every read word)
+        recs = _pack_tclk_set(False, True)
         recs[-1] &= ~0x8
         dr_recs, ds, dc = _pack_shift_dr16(0x0000, False, capture=True)
         self._qr_dr_start = len(recs) + ds
         self._qr_dr_count = dc
         recs.extend(dr_recs)
         recs[-1] &= ~0x8
-        recs.extend(_pack_tclk_set(True, False))  # SetTCLK
+        recs.extend(_pack_tclk_set(True, False))
         self._qr_total = len(recs)
         self._qr_words = _records_to_words(recs)
         return True
-
-    def _read_block_quick_word(self):
-        """Read one word via quick path, using pre-computed FIFO template."""
-        rx = self._transport.execute(self._qr_words)
-        self._tclk_high = True
-        return _extract_tdo(rx, self._qr_total, self._qr_dr_start, self._qr_dr_count)
 
     def _begin_write_block_quick(self, address):
         if not self._set_pc((address - 2) & 0x000FFFFF):
@@ -575,47 +540,27 @@ class SBWNative:
         self._shift_ir8(_IR_ADDR_CAPTURE)
         self._shift_ir8(_IR_DATA_QUICK)
         self._tclk_set(True)
-
         self._shift_dr16(0x1111)  # prime pipeline
         self._tclk_set(False)
         self._tclk_set(True)
 
-        # Pre-compute write template with all data TDI bits = 0.
-        # We compute masks to scatter 16 data bits into the FIFO words.
+        # Pre-compute base FIFO words (data TDI bits = 0) and scatter masks
         recs = _pack_shift_dr16(0x0000, True, capture=False)
         recs[-1] &= ~0x8
-        recs.extend(_pack_tclk_set(False, True))  # ClrTCLK TMSLDH
+        recs.extend(_pack_tclk_set(False, True))
         recs[-1] &= ~0x8
-        recs.extend(_pack_tclk_set(True, False))  # SetTCLK
+        recs.extend(_pack_tclk_set(True, False))
         base = _records_to_words(recs)
         self._qw_base = (base[0], base[1], base[2])
 
-        # Build scatter masks: for each data bit (MSB first), which
-        # FIFO word and bit position it maps to.
-        # Data bit N → record index 3+N → TDI at bit ((rec%8)*4)+2
+        # Scatter masks: data bit N → record 3+N → TDI at bit ((rec%8)*4)+2
         self._qw_masks = [[], [], []]
         for n in range(16):
             ri = 3 + n
             wi = ri >> 3
             bp = ((ri & 7) << 2) + 2
-            self._qw_masks[wi].append((15 - n, bp))  # (src_bit, dst_bit)
+            self._qw_masks[wi].append((15 - n, bp))
         return True
-
-    def _write_block_quick_word(self, data):
-        """Write one word via quick path, scattering data bits directly."""
-        w0, w1, w2 = self._qw_base
-        d = data & 0xFFFF
-        for sb, db in self._qw_masks[0]:
-            if d & (1 << sb):
-                w0 |= (1 << db)
-        for sb, db in self._qw_masks[1]:
-            if d & (1 << sb):
-                w1 |= (1 << db)
-        for sb, db in self._qw_masks[2]:
-            if d & (1 << sb):
-                w2 |= (1 << db)
-        self._transport.execute_no_capture((w0, w1, w2))
-        self._tclk_high = True
 
     def _finish_write_block_quick(self):
         self._shift_ir8(_IR_CNTRL_SIG_16BIT)
@@ -631,22 +576,19 @@ class SBWNative:
     def read_id(self):
         last_id = 0
         ok = False
-
         for _ in range(_JTAG_ATTEMPTS):
             self._begin_session()
             self._tap_reset()
             last_id = self._shift_ir8_capture(_IR_CNTRL_SIG_CAPTURE)
             self._end_session()
-            if last_id == _JTAG_ID_EXPECTED:
+            if last_id == JTAG_ID_EXPECTED:
                 ok = True
                 break
-
         return ok, last_id
 
     def bypass_test(self):
         captured = 0
         ok = False
-
         for _ in range(_JTAG_ATTEMPTS):
             self._begin_session()
             self._tap_reset()
@@ -656,7 +598,6 @@ class SBWNative:
             if captured == BYPASS_EXPECTED:
                 ok = True
                 break
-
         return ok, captured
 
     def sync_and_por(self):
@@ -667,13 +608,11 @@ class SBWNative:
             self._end_session()
             if ok:
                 return ok, status
-
         return False, 0
 
     def read_mem16(self, address):
         data = 0
         ok = False
-
         for _ in range(_JTAG_ATTEMPTS):
             self._begin_session()
             self._tap_reset()
@@ -683,13 +622,11 @@ class SBWNative:
             self._end_session()
             if ok:
                 break
-
         return ok, data
 
     def write_mem16(self, address, value):
         readback = 0
         ok = False
-
         for _ in range(_JTAG_ATTEMPTS):
             self._begin_session()
             self._tap_reset()
@@ -705,7 +642,6 @@ class SBWNative:
             self._end_session()
             if ok:
                 break
-
         return ok, readback
 
     def read_block16(self, address, words):
@@ -714,7 +650,6 @@ class SBWNative:
 
         result = b""
         ok = False
-
         for _ in range(_JTAG_ATTEMPTS):
             self._begin_session()
             self._tap_reset()
@@ -722,8 +657,6 @@ class SBWNative:
             if cpu_ok:
                 fe_ok, _ = self._in_full_emulation()
                 if fe_ok and self._begin_read_block_quick(address):
-                    import array
-                    # Replicate per-word template using list multiply (fast)
                     fifo_tx = array.array("I", list(self._qr_words) * words)
                     rx_buf = self._dma_transfer(fifo_tx, words, capture_rx=True)
                     buf = bytearray(words * 2)
@@ -740,7 +673,6 @@ class SBWNative:
             self._end_session()
             if ok:
                 break
-
         return ok, result
 
     def write_block16(self, address, data):
@@ -753,7 +685,6 @@ class SBWNative:
             return False
 
         ok = False
-
         for _ in range(_JTAG_ATTEMPTS):
             self._begin_session()
             self._tap_reset()
@@ -764,24 +695,27 @@ class SBWNative:
                     ok_unlock, saved, changed = self._unlock_fram(address)
                     if ok_unlock:
                         if block_mask == 0:
+                            # RAM/peripheral: per-word write
                             for i in range(word_count):
                                 w = data[i * 2] | (data[i * 2 + 1] << 8)
                                 self._write_mem16_sequence(address + i * 2, w)
                             write_ok, _ = self._in_full_emulation()
                         else:
+                            # FRAM: quick block write via DMA
                             if self._begin_write_block_quick(address):
-                                # Pre-compute ALL FIFO words, then tight loop
-                                import array
                                 fifo = array.array("I", (0 for _ in range(word_count * 3)))
                                 for i in range(word_count):
                                     d = data[i * 2] | (data[i * 2 + 1] << 8)
                                     w0, w1, w2 = self._qw_base
                                     for sb, db in self._qw_masks[0]:
-                                        if d & (1 << sb): w0 |= 1 << db
+                                        if d & (1 << sb):
+                                            w0 |= 1 << db
                                     for sb, db in self._qw_masks[1]:
-                                        if d & (1 << sb): w1 |= 1 << db
+                                        if d & (1 << sb):
+                                            w1 |= 1 << db
                                     for sb, db in self._qw_masks[2]:
-                                        if d & (1 << sb): w2 |= 1 << db
+                                        if d & (1 << sb):
+                                            w2 |= 1 << db
                                     idx = i * 3
                                     fifo[idx] = w0
                                     fifo[idx + 1] = w1
@@ -796,7 +730,6 @@ class SBWNative:
             self._end_session()
             if ok:
                 break
-
         return ok
 
     # -- Byte-level helpers --
@@ -804,29 +737,22 @@ class SBWNative:
     def read_bytes(self, address, length):
         if length <= 0:
             return True, b""
-
         start = address & ~0x1
-        end = address + length
-        aligned_end = (end + 1) & ~0x1
+        aligned_end = ((address + length) + 1) & ~0x1
         word_count = (aligned_end - start) // 2
-
         ok, payload = self.read_block16(start, word_count)
         if not ok:
             return False, b""
-
         offset = address - start
         return True, payload[offset: offset + length]
 
     def write_bytes(self, address, data):
         if not data:
             return True
-
         start = address & ~0x1
-        end = address + len(data)
-        aligned_end = (end + 1) & ~0x1
+        aligned_end = ((address + len(data)) + 1) & ~0x1
         total_length = aligned_end - start
         offset = address - start
-
         if start != address or total_length != len(data):
             ok, existing = self.read_block16(start, total_length // 2)
             if not ok:
@@ -834,7 +760,6 @@ class SBWNative:
             payload = bytearray(existing)
         else:
             payload = bytearray(total_length)
-
         payload[offset: offset + len(data)] = data
         return self.write_block16(start, bytes(payload))
 
@@ -846,20 +771,17 @@ class SBWNative:
         ok, original = self.read_mem16(address)
         if not ok:
             return False, 0, 0, 0
-
         ok, test_readback = self.write_mem16(address, value)
         if not ok or test_readback != (value & 0xFFFF):
             return False, original, test_readback, 0
-
         ok, restored_readback = self.write_mem16(address, original)
         if not ok or restored_readback != original:
             return False, original, test_readback, restored_readback
-
         return True, original, test_readback, restored_readback
 
 
 # ---------------------------------------------------------------------------
-# Formatting helpers (unchanged from original)
+# Formatting helpers
 # ---------------------------------------------------------------------------
 
 def format_status(status):
@@ -868,11 +790,8 @@ def format_status(status):
 
 def format_bypass(ok, captured):
     return "bypass pattern=0x%04X captured=0x%04X expected=0x%04X %s" % (
-        BYPASS_PATTERN,
-        captured,
-        BYPASS_EXPECTED,
-        "(expected)" if ok else "(unexpected)",
-    )
+        BYPASS_PATTERN, captured, BYPASS_EXPECTED,
+        "(expected)" if ok else "(unexpected)")
 
 
 def format_sync(ok, control_capture):

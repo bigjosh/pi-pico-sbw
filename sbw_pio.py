@@ -1,6 +1,6 @@
 """PIO-based SBW transport for MSP430 JTAG over Spy-Bi-Wire.
 
-FIFO record format (4 bits, shift-right):
+FIFO record format (4 bits, shift-right from OSR):
   bit 0: TMSLDH  (affects BOTH slot 1 and slot 2)
   bit 1: TMS
   bit 2: TDI
@@ -90,64 +90,81 @@ def sbw_packet_program():
 
 
 class SBWTransport:
-    def __init__(self, pio_id=0, sm_id=0):
+    """Manages the PIO state machine for SBW communication."""
+
+    def __init__(self, sm_id=0):
         self._clock_pin = machine.Pin(SBW_PIN_CLOCK)
         self._data_pin = machine.Pin(SBW_PIN_DATA)
         self._sm = None
-        self._pio_id = pio_id
         self._sm_id = sm_id
 
-    def deinit(self):
-        if self._sm is not None:
-            self._sm.active(0); self._sm = None
-
     def release(self):
+        """Release SBW lines: SBWTDIO -> input, SBWTCK -> low."""
         if self._sm is not None:
             self._sm.active(0)
         self._clock_pin.init(machine.Pin.OUT, value=0)
         self._data_pin.init(machine.Pin.IN)
 
     def entry_rst_high(self):
+        """SBW entry sequence, RST_HIGH mode (FR4xx). Uses GPIO."""
         clk, dat = self._clock_pin, self._data_pin
-        dat.init(machine.Pin.IN); clk.value(0); time.sleep_ms(4)
-        dat.init(machine.Pin.OUT, value=1); clk.value(1); time.sleep_ms(20)
-        time.sleep_us(60); clk.value(0); time.sleep_us(1); clk.value(1); time.sleep_us(60)
-        time.sleep_ms(5)
-
-    def entry_rst_low(self):
-        clk, dat = self._clock_pin, self._data_pin
-        dat.init(machine.Pin.IN); clk.value(0); time.sleep_ms(1)
-        dat.init(machine.Pin.OUT, value=0); time.sleep_ms(50)
-        clk.value(1); time.sleep_ms(100)
-        dat.value(1); time.sleep_us(40); clk.value(0); time.sleep_us(1); clk.value(1); time.sleep_us(40)
+        dat.init(machine.Pin.IN)
+        clk.value(0)
+        time.sleep_ms(4)
+        dat.init(machine.Pin.OUT, value=1)
+        clk.value(1)
+        time.sleep_ms(20)
+        time.sleep_us(60)
+        clk.value(0)
+        time.sleep_us(1)
+        clk.value(1)
+        time.sleep_us(60)
         time.sleep_ms(5)
 
     def _activate_pio(self):
+        """Switch pins from GPIO to PIO and start the state machine.
+
+        Primes the OSR with a single DONE record (TMS=1, TDI=1) so
+        the SM processes only 1 harmless SBW clock before stalling
+        on autopull for real data.
+        """
         import gc
         if self._sm is not None:
-            self._sm.active(0); self._sm = None; gc.collect()
+            self._sm.active(0)
+            self._sm = None
+            gc.collect()
         self._sm = rp2.StateMachine(
             self._sm_id, sbw_packet_program, freq=_PIO_FREQ,
             sideset_base=self._clock_pin, out_base=self._data_pin,
             set_base=self._data_pin, in_base=self._data_pin)
-        self._sm.put(0x0000000E)  # prime: TMS=1, TDI=1, DONE=1
+        # Prime: TMSLDH=0, TMS=1, TDI=1, DONE=1 = 0xE (no SBWTDIO transition)
+        self._sm.put(0x0000000E)
         self._sm.exec("pull(block) .side(1)")
         self._sm.active(1)
-        self._sm.get()
+        self._sm.get()  # drain priming push
 
     def begin_session(self):
-        self.release(); time.sleep_ms(15)
-        self.entry_rst_high(); self._activate_pio()
+        """Full session start: GPIO release+settle+entry, then PIO."""
+        self.release()
+        time.sleep_ms(15)
+        self.entry_rst_high()
+        self._activate_pio()
 
     def end_session(self):
-        self.release(); time.sleep_us(200)
+        """End session: back to GPIO, release lines."""
+        self.release()
+        time.sleep_us(200)
 
     def execute(self, fifo_words):
+        """Send packed FIFO words and return the TDO result word."""
         sm = self._sm
-        for w in fifo_words: sm.put(w)
+        for w in fifo_words:
+            sm.put(w)
         return sm.get()
 
     def execute_no_capture(self, fifo_words):
+        """Send packed FIFO words, discard TDO result."""
         sm = self._sm
-        for w in fifo_words: sm.put(w)
+        for w in fifo_words:
+            sm.put(w)
         sm.get()
