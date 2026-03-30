@@ -577,13 +577,15 @@ class SBWNative:
     def open(self):
         """Enter SBW session and prepare CPU. Call once after power_on.
 
-        Returns (ok, status). Leaves TAP in Run-Test/Idle.
+        Returns (ok, status). Leaves TAP in Run-Test/Idle with
+        TCLK LOW to prevent false TCLK edges from subsequent shifts.
         """
         for _ in range(_JTAG_ATTEMPTS):
             self._begin_session()
             self._tap_reset()
             ok, status = self._prepare_cpu()
             if ok:
+                self._tclk_set(False)  # ensure TCLK LOW for clean shifts
                 return True, status
             self._end_session()
         return False, 0
