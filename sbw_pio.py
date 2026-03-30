@@ -16,6 +16,7 @@ When TMSLDH=1: TCLK mode (used for ClrTCLK)
           wait 50ns, clock rise  (centered transition)
 """
 
+import array
 import rp2
 import machine
 import time
@@ -25,6 +26,8 @@ SBW_PIN_CLOCK = const(2)
 SBW_PIN_DATA = const(3)
 
 _PIO_FREQ = const(100_000_000)
+_PIO0_TXF0 = const(0x50200010)
+_PIO0_RXF0 = const(0x50200020)
 
 
 @rp2.asm_pio(
@@ -122,12 +125,7 @@ class SBWTransport:
         time.sleep_ms(5)
 
     def _activate_pio(self):
-        """Switch pins from GPIO to PIO and start the state machine.
-
-        Primes the OSR with a single DONE record (TMS=1, TDI=1) so
-        the SM processes only 1 harmless SBW clock before stalling
-        on autopull for real data.
-        """
+        """Switch pins from GPIO to PIO and start the state machine."""
         import gc
         if self._sm is not None:
             self._sm.active(0)
@@ -155,15 +153,43 @@ class SBWTransport:
         self.release()
         time.sleep_us(200)
 
+    # -- Stream execution --
+
+    def execute_pio(self, tx_buf, rx_buf):
+        """Fire-and-forget DMA transfer.
+
+        tx_buf: array.array('I') of FIFO words to feed PIO
+        rx_buf: array.array('I') to receive ISR push words
+
+        Launches TX and RX DMA, blocks until RX DMA completes
+        (all expected pushes received).
+        """
+        dma_tx = rp2.DMA()
+        dma_rx = rp2.DMA()
+        try:
+            ctrl_tx = dma_tx.pack_ctrl(treq_sel=0, size=2,
+                                       inc_read=True, inc_write=False)
+            ctrl_rx = dma_rx.pack_ctrl(treq_sel=4, size=2,
+                                       inc_read=False, inc_write=True)
+            dma_rx.config(read=_PIO0_RXF0, write=rx_buf,
+                         count=len(rx_buf), ctrl=ctrl_rx, trigger=True)
+            dma_tx.config(read=tx_buf, write=_PIO0_TXF0,
+                         count=len(tx_buf), ctrl=ctrl_tx, trigger=True)
+            while dma_rx.active():
+                pass
+        finally:
+            dma_tx.close()
+            dma_rx.close()
+
     def execute(self, fifo_words):
-        """Send packed FIFO words and return the TDO result word."""
+        """Send packed FIFO words via sm.put/get. Returns RX word."""
         sm = self._sm
         for w in fifo_words:
             sm.put(w)
         return sm.get()
 
     def execute_no_capture(self, fifo_words):
-        """Send packed FIFO words, discard TDO result."""
+        """Send packed FIFO words via sm.put/get, discard RX."""
         sm = self._sm
         for w in fifo_words:
             sm.put(w)
