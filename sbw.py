@@ -572,24 +572,41 @@ class SBWNative:
         ok, _ = self._in_full_emulation()
         return ok
 
-    # -- Public API (each operation manages its own session) --
+    # -- Session lifecycle --
 
-    def read_id(self):
-        last_id = 0
-        ok = False
+    def open(self):
+        """Enter SBW session and prepare CPU. Call once after power_on.
+
+        Returns (ok, status). Leaves TAP in Run-Test/Idle.
+        """
         for _ in range(_JTAG_ATTEMPTS):
             self._begin_session()
             self._tap_reset()
-            last_id = self._shift_ir8_capture(_IR_CNTRL_SIG_CAPTURE)
+            ok, status = self._prepare_cpu()
+            if ok:
+                return True, status
             self._end_session()
-            if last_id == JTAG_ID_EXPECTED:
-                ok = True
-                break
-        return ok, last_id
+        return False, 0
+
+    def close(self):
+        """End SBW session. Call once before power_off."""
+        self._end_session()
+
+    # -- Public API (all assume TAP in RTI, leave TAP in RTI) --
+
+    def read_id(self):
+        """Read JTAG ID. Own session (call before open)."""
+        for _ in range(_JTAG_ATTEMPTS):
+            self._begin_session()
+            self._tap_reset()
+            jid = self._shift_ir8_capture(_IR_CNTRL_SIG_CAPTURE)
+            self._end_session()
+            if jid == JTAG_ID_EXPECTED:
+                return True, jid
+        return False, jid
 
     def bypass_test(self):
-        captured = 0
-        ok = False
+        """Bypass smoke test. Own session (call before open)."""
         for _ in range(_JTAG_ATTEMPTS):
             self._begin_session()
             self._tap_reset()
@@ -597,218 +614,123 @@ class SBWNative:
             captured = self._shift_dr16_capture(BYPASS_PATTERN)
             self._end_session()
             if captured == BYPASS_EXPECTED:
-                ok = True
-                break
-        return ok, captured
-
-    def sync_and_por(self):
-        for _ in range(_JTAG_ATTEMPTS):
-            self._begin_session()
-            self._tap_reset()
-            ok, status = self._prepare_cpu()
-            self._end_session()
-            if ok:
-                return ok, status
-        return False, 0
+                return True, captured
+        return False, captured
 
     def read_mem16(self, address):
-        data = 0
-        ok = False
-        for _ in range(_JTAG_ATTEMPTS):
-            self._begin_session()
-            self._tap_reset()
-            cpu_ok, _ = self._prepare_cpu()
-            if cpu_ok:
-                ok, data = self._read_mem16_internal(address)
-            self._end_session()
-            if ok:
-                break
-        return ok, data
+        """Read a single 16-bit word."""
+        return self._read_mem16_internal(address)
 
     def write_mem16(self, address, value):
+        """Write a single 16-bit word (handles FRAM protection)."""
+        ok_unlock, saved, changed = self._unlock_fram(address)
+        if not ok_unlock:
+            return False, 0
+        ok_write = self._write_mem16_internal(address, value)
         readback = 0
-        ok = False
-        for _ in range(_JTAG_ATTEMPTS):
-            self._begin_session()
-            self._tap_reset()
-            cpu_ok, _ = self._prepare_cpu()
-            if cpu_ok:
-                ok_unlock, saved, changed = self._unlock_fram(address)
-                if ok_unlock:
-                    ok_write = self._write_mem16_internal(address, value)
-                    if ok_write:
-                        ok_read, readback = self._read_mem16_internal(address)
-                        ok = ok_read and readback == value
-                    self._restore_fram(saved, changed)
-            self._end_session()
-            if ok:
-                break
-        return ok, readback
+        if ok_write:
+            ok_read, readback = self._read_mem16_internal(address)
+            ok_write = ok_read and readback == value
+        self._restore_fram(saved, changed)
+        return ok_write, readback
+
 
     def read_block16(self, address, words):
+        """Read block via quick path + DMA."""
         if words == 0:
             return True, b""
-
-        result = b""
-        ok = False
-        # Pre-build the per-word read template
         per_word_tx, _ = build_read_quick_word()
-
-        for _ in range(_JTAG_ATTEMPTS):
-            self._begin_session()
-            self._tap_reset()
-            cpu_ok, _ = self._prepare_cpu()
-            if cpu_ok:
-                fe_ok, _ = self._in_full_emulation()
-                if fe_ok and self._begin_read_block_quick(address):
-                    tx, n = build_read_block_stream(words, per_word_tx)
-                    rx = array.array("I", (0 for _ in range(n)))
-                    self._transport.execute_pio(tx, rx)
-                    buf = bytearray(words * 2)
-                    for i in range(words):
-                        w = extract_quick_read(rx[i])
-                        buf[i * 2] = w & 0xFF
-                        buf[i * 2 + 1] = (w >> 8) & 0xFF
-                    result = bytes(buf)
-                    self._tclk_high = True
-                    ok = True
-            self._end_session()
-            if ok:
-                break
-        return ok, result
+        fe_ok, _ = self._in_full_emulation()
+        if not fe_ok or not self._begin_read_block_quick(address):
+            return False, b""
+        tx, n = build_read_block_stream(words, per_word_tx)
+        rx = array.array("I", (0 for _ in range(n)))
+        self._transport.execute_pio(tx, rx)
+        buf = bytearray(words * 2)
+        for i in range(words):
+            w = extract_quick_read(rx[i])
+            buf[i * 2] = w & 0xFF
+            buf[i * 2 + 1] = (w >> 8) & 0xFF
+        self._tclk_high = True
+        return True, bytes(buf)
 
     def write_block16(self, address, data):
+        """Write block (handles FRAM protection)."""
         if len(data) == 0:
             return True
-
         word_count = len(data) // 2
         block_mask = self._block_protection_mask(address, word_count)
         if block_mask is None:
             return False
+        fe_ok, _ = self._in_full_emulation()
+        if not fe_ok:
+            return False
+        ok_unlock, saved, changed = self._unlock_fram(address)
+        if not ok_unlock:
+            return False
+        if block_mask == 0:
+            for i in range(word_count):
+                w = data[i * 2] | (data[i * 2 + 1] << 8)
+                self._write_mem16_sequence(address + i * 2, w)
+            write_ok, _ = self._in_full_emulation()
+        else:
+            if self._begin_write_block_quick(address):
+                qw_base, qw_masks = self._compute_write_templates()
+                tx, n = build_write_block_stream(data, qw_base, qw_masks)
+                rx = array.array("I", (0 for _ in range(n)))
+                self._transport.execute_pio(tx, rx)
+                self._tclk_high = True
+                write_ok = self._finish_write_block_quick()
+            else:
+                write_ok = False
+        restore_ok = self._restore_fram(saved, changed)
+        return write_ok and restore_ok
 
-        ok = False
-        for _ in range(_JTAG_ATTEMPTS):
-            self._begin_session()
-            self._tap_reset()
-            cpu_ok, _ = self._prepare_cpu()
-            if cpu_ok:
-                fe_ok, _ = self._in_full_emulation()
-                if fe_ok:
-                    ok_unlock, saved, changed = self._unlock_fram(address)
-                    if ok_unlock:
-                        if block_mask == 0:
-                            for i in range(word_count):
-                                w = data[i * 2] | (data[i * 2 + 1] << 8)
-                                self._write_mem16_sequence(address + i * 2, w)
-                            write_ok, _ = self._in_full_emulation()
-                        else:
-                            if self._begin_write_block_quick(address):
-                                qw_base, qw_masks = self._compute_write_templates()
-                                tx, n = build_write_block_stream(data, qw_base, qw_masks)
-                                rx = array.array("I", (0 for _ in range(n)))
-                                self._transport.execute_pio(tx, rx)
-                                self._tclk_high = True
-                                write_ok = self._finish_write_block_quick()
-                            else:
-                                write_ok = False
-                        restore_ok = self._restore_fram(saved, changed)
-                        ok = write_ok and restore_ok
-            self._end_session()
-            if ok:
-                break
-        return ok
-
-    # -- Pre-computed stream API --
+    # -- Pre-computed stream API (prepare once, send many) --
 
     def prepare_write_stream(self, data):
-        """Pre-compute TX stream for a block write. Call once at startup.
-
-        Args:
-            data: bytes (even length, little-endian 16-bit words)
-        Returns:
-            Opaque stream object for send_write_block().
-        """
+        """Pre-compute TX stream for a block write. Call once."""
         qw_base, qw_masks = self._compute_write_templates()
         tx, word_count = build_write_block_stream(data, qw_base, qw_masks)
-        return (tx, word_count, data)
+        return (tx, word_count)
 
     def prepare_read_stream(self, words):
-        """Pre-compute TX stream for a block read. Call once at startup.
-
-        Args:
-            words: number of 16-bit words to read
-        Returns:
-            Opaque stream object for send_read_block().
-        """
+        """Pre-compute TX stream for a block read. Call once."""
         per_word_tx, _ = build_read_quick_word()
         tx, n = build_read_block_stream(words, per_word_tx)
         return (tx, n)
 
     def send_write_block(self, address, stream):
-        """Write pre-computed stream to target address via DMA.
-
-        Handles session, FRAM unlock, SetPC, DMA, cleanup.
-        stream: object from prepare_write_stream().
-        """
-        tx, word_count, _ = stream
-        block_mask = self._block_protection_mask(address, word_count)
-        if block_mask is None:
+        """Write pre-computed stream to target. Assumes RTI."""
+        tx, word_count = stream
+        ok_unlock, saved, changed = self._unlock_fram(address)
+        if not ok_unlock:
             return False
-
-        ok = False
-        for _ in range(_JTAG_ATTEMPTS):
-            self._begin_session()
-            self._tap_reset()
-            cpu_ok, _ = self._prepare_cpu()
-            if cpu_ok:
-                fe_ok, _ = self._in_full_emulation()
-                if fe_ok:
-                    ok_unlock, saved, changed = self._unlock_fram(address)
-                    if ok_unlock:
-                        if self._begin_write_block_quick(address):
-                            rx = array.array("I", (0 for _ in range(word_count)))
-                            self._transport.execute_pio(tx, rx)
-                            self._tclk_high = True
-                            write_ok = self._finish_write_block_quick()
-                        else:
-                            write_ok = False
-                        restore_ok = self._restore_fram(saved, changed)
-                        ok = write_ok and restore_ok
-            self._end_session()
-            if ok:
-                break
-        return ok
+        if self._begin_write_block_quick(address):
+            rx = array.array("I", (0 for _ in range(word_count)))
+            self._transport.execute_pio(tx, rx)
+            self._tclk_high = True
+            write_ok = self._finish_write_block_quick()
+        else:
+            write_ok = False
+        restore_ok = self._restore_fram(saved, changed)
+        return write_ok and restore_ok
 
     def send_read_block(self, address, stream):
-        """Read block using pre-computed stream via DMA.
-
-        stream: object from prepare_read_stream().
-        Returns: (ok, bytes)
-        """
+        """Read block using pre-computed stream. Assumes RTI."""
         tx, words = stream
-        result = b""
-        ok = False
-        for _ in range(_JTAG_ATTEMPTS):
-            self._begin_session()
-            self._tap_reset()
-            cpu_ok, _ = self._prepare_cpu()
-            if cpu_ok:
-                fe_ok, _ = self._in_full_emulation()
-                if fe_ok and self._begin_read_block_quick(address):
-                    rx = array.array("I", (0 for _ in range(words)))
-                    self._transport.execute_pio(tx, rx)
-                    buf = bytearray(words * 2)
-                    for i in range(words):
-                        w = extract_quick_read(rx[i])
-                        buf[i * 2] = w & 0xFF
-                        buf[i * 2 + 1] = (w >> 8) & 0xFF
-                    result = bytes(buf)
-                    self._tclk_high = True
-                    ok = True
-            self._end_session()
-            if ok:
-                break
-        return ok, result
+        fe_ok, _ = self._in_full_emulation()
+        if not fe_ok or not self._begin_read_block_quick(address):
+            return False, b""
+        rx = array.array("I", (0 for _ in range(words)))
+        self._transport.execute_pio(tx, rx)
+        buf = bytearray(words * 2)
+        for i in range(words):
+            w = extract_quick_read(rx[i])
+            buf[i * 2] = w & 0xFF
+            buf[i * 2 + 1] = (w >> 8) & 0xFF
+        self._tclk_high = True
+        return True, bytes(buf)
 
     # -- Byte-level helpers --
 
@@ -817,12 +739,10 @@ class SBWNative:
             return True, b""
         start = address & ~0x1
         aligned_end = ((address + length) + 1) & ~0x1
-        word_count = (aligned_end - start) // 2
-        ok, payload = self.read_block16(start, word_count)
+        ok, payload = self.read_block16(start, (aligned_end - start) // 2)
         if not ok:
             return False, b""
-        offset = address - start
-        return True, payload[offset: offset + length]
+        return True, payload[address - start: address - start + length]
 
     def write_bytes(self, address, data):
         if not data:
