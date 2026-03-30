@@ -718,6 +718,98 @@ class SBWNative:
                 break
         return ok
 
+    # -- Pre-computed stream API --
+
+    def prepare_write_stream(self, data):
+        """Pre-compute TX stream for a block write. Call once at startup.
+
+        Args:
+            data: bytes (even length, little-endian 16-bit words)
+        Returns:
+            Opaque stream object for send_write_block().
+        """
+        qw_base, qw_masks = self._compute_write_templates()
+        tx, word_count = build_write_block_stream(data, qw_base, qw_masks)
+        return (tx, word_count, data)
+
+    def prepare_read_stream(self, words):
+        """Pre-compute TX stream for a block read. Call once at startup.
+
+        Args:
+            words: number of 16-bit words to read
+        Returns:
+            Opaque stream object for send_read_block().
+        """
+        per_word_tx, _ = build_read_quick_word()
+        tx, n = build_read_block_stream(words, per_word_tx)
+        return (tx, n)
+
+    def send_write_block(self, address, stream):
+        """Write pre-computed stream to target address via DMA.
+
+        Handles session, FRAM unlock, SetPC, DMA, cleanup.
+        stream: object from prepare_write_stream().
+        """
+        tx, word_count, _ = stream
+        block_mask = self._block_protection_mask(address, word_count)
+        if block_mask is None:
+            return False
+
+        ok = False
+        for _ in range(_JTAG_ATTEMPTS):
+            self._begin_session()
+            self._tap_reset()
+            cpu_ok, _ = self._prepare_cpu()
+            if cpu_ok:
+                fe_ok, _ = self._in_full_emulation()
+                if fe_ok:
+                    ok_unlock, saved, changed = self._unlock_fram(address)
+                    if ok_unlock:
+                        if self._begin_write_block_quick(address):
+                            rx = array.array("I", (0 for _ in range(word_count)))
+                            self._transport.execute_pio(tx, rx)
+                            self._tclk_high = True
+                            write_ok = self._finish_write_block_quick()
+                        else:
+                            write_ok = False
+                        restore_ok = self._restore_fram(saved, changed)
+                        ok = write_ok and restore_ok
+            self._end_session()
+            if ok:
+                break
+        return ok
+
+    def send_read_block(self, address, stream):
+        """Read block using pre-computed stream via DMA.
+
+        stream: object from prepare_read_stream().
+        Returns: (ok, bytes)
+        """
+        tx, words = stream
+        result = b""
+        ok = False
+        for _ in range(_JTAG_ATTEMPTS):
+            self._begin_session()
+            self._tap_reset()
+            cpu_ok, _ = self._prepare_cpu()
+            if cpu_ok:
+                fe_ok, _ = self._in_full_emulation()
+                if fe_ok and self._begin_read_block_quick(address):
+                    rx = array.array("I", (0 for _ in range(words)))
+                    self._transport.execute_pio(tx, rx)
+                    buf = bytearray(words * 2)
+                    for i in range(words):
+                        w = extract_quick_read(rx[i])
+                        buf[i * 2] = w & 0xFF
+                        buf[i * 2 + 1] = (w >> 8) & 0xFF
+                    result = bytes(buf)
+                    self._tclk_high = True
+                    ok = True
+            self._end_session()
+            if ok:
+                break
+        return ok, result
+
     # -- Byte-level helpers --
 
     def read_bytes(self, address, length):

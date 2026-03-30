@@ -115,6 +115,26 @@ def load_firmware_blocks(path=FIRMWARE_FILE_NAME):
     return blocks
 
 
+def prepare_firmware_streams(sbw, blocks):
+    """Pre-compute DMA TX streams for all firmware blocks.
+
+    Call once at startup. Returns list of (address, stream, data) tuples
+    ready for sbw.send_write_block() and sbw.verify_bytes().
+    """
+    import time
+    print("Pre-computing firmware streams...")
+    t0 = time.ticks_us()
+    prepared = []
+    for address, data in blocks:
+        stream = sbw.prepare_write_stream(data)
+        prepared.append((address, stream, data))
+    dt = time.ticks_diff(time.ticks_us(), t0)
+    total_bytes = sum(len(d) for _, _, d in prepared)
+    print("  %d block(s), %d bytes, prepared in %d ms\n" % (
+        len(prepared), total_bytes, dt // 1000))
+    return prepared
+
+
 def _find_first_mismatch(expected, actual):
     limit = min(len(expected), len(actual))
     for index in range(limit):
@@ -155,7 +175,11 @@ def _run_target_for_observation(sbw):
         sbw.power_off()
 
 
-def program_once(sbw, firmware_blocks, now=None):
+def program_once(sbw, prepared_blocks, now=None):
+    """Program the target using pre-computed firmware streams.
+
+    prepared_blocks: list from prepare_firmware_streams().
+    """
     if now is None:
         now = time.gmtime()
 
@@ -175,14 +199,20 @@ def program_once(sbw, firmware_blocks, now=None):
 
         _write_and_verify_bytes(sbw, "commissioning timestamp", TIMESTAMP_ADDRESS, build_timestamp_bytes(now))
 
-        for index, (address, data) in enumerate(firmware_blocks, start=1):
+        for index, (address, stream, data) in enumerate(prepared_blocks, start=1):
             label = "firmware block %d/%d addr=0x%05X len=%d" % (
-                index,
-                len(firmware_blocks),
-                address & 0xFFFFF,
-                len(data),
-            )
-            _write_and_verify_bytes(sbw, label, address, data)
+                index, len(prepared_blocks), address & 0xFFFFF, len(data))
+
+            print("Writing %s..." % label)
+            if not sbw.send_write_block(address, stream):
+                raise RuntimeError("write failed for %s" % label)
+
+            print("Verifying %s..." % label)
+            ok, actual = sbw.verify_bytes(address, data)
+            if not ok:
+                mismatch = _find_first_mismatch(data, actual)
+                raise RuntimeError("verify failed for %s at 0x%05X" % (
+                    label, (address + (mismatch or 0)) & 0xFFFFF))
     except Exception:
         sbw.power_off()
         raise
@@ -218,6 +248,7 @@ def program_loop():
     print("Logging disabled.")
     firmware_blocks = load_firmware_blocks()
     sbw = SBWNative()
+    prepared_blocks = prepare_firmware_streams(sbw, firmware_blocks)
     console = _SerialConsole()
 
     while True:
@@ -237,7 +268,7 @@ def program_loop():
         print("Programming cycle started.")
 
         try:
-            program_once(sbw, firmware_blocks)
+            program_once(sbw, prepared_blocks)
             print("Programming cycle finished.\n")
         except Exception as exc:
             print("Programming failed: %s\n" % exc)
