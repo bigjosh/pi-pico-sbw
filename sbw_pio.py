@@ -79,7 +79,7 @@ def sbw_packet_program():
     # -- Slot 3: TDO  (sample before rise) --
     label("tdo")
     set(pindirs, 0)                    .side(1)       # release on rise
-    nop()                              .side(0) [14]  # falls, 150ns settle
+    nop()                              .side(0)  [7]  # falls, 80ns settle
     in_(pins, 1)                       .side(1)       # SAMPLE before rise
     set(pindirs, 1)                    .side(1)       # re-acquire
 
@@ -100,6 +100,13 @@ class SBWTransport:
         self._data_pin = machine.Pin(SBW_PIN_DATA)
         self._sm = None
         self._sm_id = sm_id
+        # Pre-allocate DMA channels (reused across all execute_pio calls)
+        self._dma_tx = rp2.DMA()
+        self._dma_rx = rp2.DMA()
+        self._ctrl_tx = self._dma_tx.pack_ctrl(
+            treq_sel=0, size=2, inc_read=True, inc_write=False)
+        self._ctrl_rx = self._dma_rx.pack_ctrl(
+            treq_sel=4, size=2, inc_read=False, inc_write=True)
 
     def release(self):
         """Release SBW lines: SBWTDIO -> input, SBWTCK -> low."""
@@ -161,25 +168,14 @@ class SBWTransport:
         tx_buf: array.array('I') of FIFO words to feed PIO
         rx_buf: array.array('I') to receive ISR push words
 
-        Launches TX and RX DMA, blocks until RX DMA completes
-        (all expected pushes received).
+        Uses pre-allocated DMA channels. Blocks until RX completes.
         """
-        dma_tx = rp2.DMA()
-        dma_rx = rp2.DMA()
-        try:
-            ctrl_tx = dma_tx.pack_ctrl(treq_sel=0, size=2,
-                                       inc_read=True, inc_write=False)
-            ctrl_rx = dma_rx.pack_ctrl(treq_sel=4, size=2,
-                                       inc_read=False, inc_write=True)
-            dma_rx.config(read=_PIO0_RXF0, write=rx_buf,
-                         count=len(rx_buf), ctrl=ctrl_rx, trigger=True)
-            dma_tx.config(read=tx_buf, write=_PIO0_TXF0,
-                         count=len(tx_buf), ctrl=ctrl_tx, trigger=True)
-            while dma_rx.active():
-                pass
-        finally:
-            dma_tx.close()
-            dma_rx.close()
+        self._dma_rx.config(read=_PIO0_RXF0, write=rx_buf,
+                           count=len(rx_buf), ctrl=self._ctrl_rx, trigger=True)
+        self._dma_tx.config(read=tx_buf, write=_PIO0_TXF0,
+                           count=len(tx_buf), ctrl=self._ctrl_tx, trigger=True)
+        while self._dma_rx.active():
+            pass
 
     def execute(self, fifo_words):
         """Send packed FIFO words via sm.put/get. Returns RX word."""
