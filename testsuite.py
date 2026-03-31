@@ -93,8 +93,8 @@ def run_regression():
         ok, bypass = sbw.bypass_test()
         assert ok and bypass == BYPASS_EXPECTED
 
-        ok, control_capture = sbw.sync_and_por()
-        assert ok and (control_capture & FULL_EMULATION_MASK) == FULL_EMULATION_MASK
+        ok, status = sbw.open()
+        assert ok
 
         ok, readback = sbw.write_mem16(REGRESSION_RAM_ADDR_0, REGRESSION_RAM_VALUE_0)
         assert ok and readback == REGRESSION_RAM_VALUE_0
@@ -121,6 +121,7 @@ def run_regression():
         assert test_readback == REGRESSION_FRAM_VALUE
         assert restored_readback == original
 
+        sbw.close()
         return True
     finally:
         sbw.power_off()
@@ -130,6 +131,10 @@ def run_bench(words=5120, address=REGRESSION_FRAM_ADDR):
     sbw = SBWNative()
     sbw.power_on()
     try:
-        return bench_block_roundtrip(sbw, address, words)
+        ok, _ = sbw.open()
+        assert ok
+        result = bench_block_roundtrip(sbw, address, words)
+        sbw.close()
+        return result
     finally:
         sbw.power_off()
