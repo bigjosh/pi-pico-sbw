@@ -4,44 +4,25 @@ import machine
 
 import sbw_native
 from sbw_config import (
-    BYPASS_EXPECTED,
-    BYPASS_PATTERN,
-    DEFAULT_HW,
-    FULL_EMULATION_MASK,
-    GPIO_OE_ADDR,
-    GPIO_OE_CLR_ADDR,
-    GPIO_OE_SET_ADDR,
-    GPIO_OUT_ADDR,
-    GPIO_OUT_SET_ADDR,
-    POWER_MASK,
+    SBW_PIN_CLOCK,
+    SBW_PIN_DATA,
+    SBW_PIN_TARGET_POWER,
     SBW_TARGET_POWER_SETTLE_MS,
     ensure_system_clock,
 )
 
 
-def _mask_to_pin(mask):
-    if mask == 0 or (mask & (mask - 1)) != 0:
-        raise ValueError("expected one-hot gpio mask")
-    pin = 0
-    while mask > 1:
-        mask >>= 1
-        pin += 1
-    return pin
-
-
 class SBWNative:
-    def __init__(self, hw=DEFAULT_HW, power_mask=POWER_MASK):
+    def __init__(self, clock_pin=SBW_PIN_CLOCK, data_pin=SBW_PIN_DATA, power_pin=SBW_PIN_TARGET_POWER):
         ensure_system_clock()
-        self.hw = tuple(hw)
-        self._clock_pin = _mask_to_pin(self.hw[0])
-        self._data_pin = _mask_to_pin(self.hw[1])
-        self._power_pin = _mask_to_pin(power_mask)
-        self._clock_mask = self.hw[0]
-        self._data_mask = self.hw[1]
-        self._power_mask = power_mask
-        self._clock = machine.Pin(self._clock_pin, machine.Pin.OUT, value=0)
-        self._data = machine.Pin(self._data_pin, machine.Pin.IN)
-        self._power = machine.Pin(self._power_pin, machine.Pin.IN)
+        self._clock_pin = clock_pin
+        self._data_pin = data_pin
+        self._power_pin = power_pin
+        self._clk = 1 << clock_pin
+        self._dio = 1 << data_pin
+        self._clock = machine.Pin(clock_pin, machine.Pin.OUT, value=0)
+        self._data = machine.Pin(data_pin, machine.Pin.IN)
+        self._power = machine.Pin(power_pin, machine.Pin.IN)
         self._power_enabled = False
         self.release()
 
@@ -58,44 +39,37 @@ class SBWNative:
 
     def power_on(self):
         self.release()
-        machine.mem32[GPIO_OUT_SET_ADDR] = self._power_mask
-        machine.mem32[GPIO_OE_SET_ADDR] = self._power_mask
+        self._power.init(machine.Pin.OUT, value=1)
         self._power_enabled = True
         time.sleep_ms(SBW_TARGET_POWER_SETTLE_MS)
 
     def power_off(self):
         self.release()
-        machine.mem32[GPIO_OE_CLR_ADDR] = self._power_mask
         self._power.init(machine.Pin.IN)
         self._power_enabled = False
 
     def status(self):
-        gpio_out = machine.mem32[GPIO_OUT_ADDR]
-        gpio_oe = machine.mem32[GPIO_OE_ADDR]
         return {
             "power": self._power_enabled,
-            "data_driving": bool(gpio_oe & self._data_mask),
-            "clock_high": bool(gpio_out & self._clock_mask),
         }
 
     def read_id(self):
-        return sbw_native.read_id(self.hw)
+        return sbw_native.read_id(self._clk, self._dio)
 
     def bypass_test(self):
-        return sbw_native.bypass_test(self.hw)
+        return sbw_native.bypass_test(self._clk, self._dio)
 
     def sync_and_por(self):
-        return sbw_native.sync_and_por(self.hw)
+        return sbw_native.sync_and_por(self._clk, self._dio)
 
     def read_mem16(self, address):
-        return sbw_native.read_mem16(self.hw, address)
+        return sbw_native.read_mem16(self._clk, self._dio, address)
 
     def write_mem16(self, address, value):
-        return sbw_native.write_mem16(self.hw, address, value)
+        return sbw_native.write_mem16(self._clk, self._dio, address, value)
 
     def read_block16(self, address, words):
-        # Returns (ok, raw_bytes) from the native block-read path.
-        return sbw_native.read_block16(self.hw, address, words)
+        return sbw_native.read_block16(self._clk, self._dio, address, words)
 
     def read_bytes(self, address, length):
         if length < 0:
@@ -116,9 +90,7 @@ class SBWNative:
         return True, payload[offset : offset + length]
 
     def write_block16(self, address, data):
-        # Block writes must stay within one writable region class:
-        # RAM/peripheral, info FRAM, or main FRAM.
-        return bool(sbw_native.write_block16(self.hw, address, data))
+        return bool(sbw_native.write_block16(self._clk, self._dio, address, data))
 
     def write_bytes(self, address, data):
         if not data:
@@ -162,22 +134,18 @@ class SBWNative:
 
 
 def format_status(status):
-    return "power=%s data=%s clock=%s" % (
-        "on" if status["power"] else "off",
-        "driving" if status["data_driving"] else "input",
-        "high" if status["clock_high"] else "low",
-    )
+    return "power=%s" % ("on" if status["power"] else "off",)
 
 
 def format_bypass(ok, captured):
-    return "bypass pattern=0x%04X captured=0x%04X expected=0x%04X %s" % (
-        BYPASS_PATTERN,
+    return "bypass captured=0x%04X expected=0x%04X %s" % (
         captured,
-        BYPASS_EXPECTED,
-        "(expected)" if ok else "(unexpected)",
+        sbw_native.BYPASS_EXPECTED,
+        "(ok)" if ok else "(unexpected)",
     )
 
 
 def format_sync(ok, control_capture):
-    state = "(full-emulation)" if ok and (control_capture & FULL_EMULATION_MASK) == FULL_EMULATION_MASK else "(unexpected)"
+    mask = sbw_native.FULL_EMULATION_MASK
+    state = "(full-emulation)" if ok and (control_capture & mask) == mask else "(unexpected)"
     return "cntrl-sig=0x%04X %s" % (control_capture, state)

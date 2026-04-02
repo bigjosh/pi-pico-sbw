@@ -1,7 +1,7 @@
 # Building `sbw_native.mpy` From Scratch
 
 This document is the full build handoff for the native MicroPython module
-[sbw_native.mpy](D:/Github/pi-pico-sbw/mpy/sbw_native.mpy).
+[sbw_native.mpy](mpy/sbw_native.mpy).
 
 It is written for someone new to this project who needs to reproduce the build
 on a fresh Windows machine.
@@ -13,27 +13,27 @@ This project does **not** build a Pico SDK firmware image.
 It builds a **MicroPython native module** (`.mpy`) that is loaded by a Pico
 already running MicroPython. The timing-critical SBW/JTAG code lives in:
 
-- [sbw_native.c](D:/Github/pi-pico-sbw/mpy/sbw_native.c)
+- [sbw_native.c](mpy/sbw_native.c)
 
 The output artifact is:
 
-- [sbw_native.mpy](D:/Github/pi-pico-sbw/mpy/sbw_native.mpy)
+- [sbw_native.mpy](mpy/sbw_native.mpy)
 
 The Python-side app files that use this module live at the repo root:
 
-- [sbw.py](D:/Github/pi-pico-sbw/sbw.py)
-- [sbw_config.py](D:/Github/pi-pico-sbw/sbw_config.py)
-- [program.py](D:/Github/pi-pico-sbw/program.py)
-- [main.py](D:/Github/pi-pico-sbw/main.py)
-- [debug_shell.py](D:/Github/pi-pico-sbw/debug_shell.py)
-- [testsuite.py](D:/Github/pi-pico-sbw/testsuite.py)
+- [sbw.py](sbw.py)
+- [sbw_config.py](sbw_config.py)
+- [program.py](program.py)
+- [main.py](main.py)
+- [debug_shell.py](debug_shell.py)
+- [testsuite.py](testsuite.py)
 
 ## Important Architectural Notes
 
 - No Pico SDK is required to build `sbw_native.mpy`.
 - No CMake is required.
 - The build uses MicroPython's `dynruntime.mk` support.
-- The current native module targets `ARCH = armv7m` as defined in [Makefile](D:/Github/pi-pico-sbw/mpy/Makefile).
+- The current native module targets `ARCH = armv7m` as defined in [Makefile](mpy/Makefile).
 - The tested runtime target is official MicroPython on `RPI_PICO2_W`.
 
 ## Tested Working Build Environment
@@ -66,7 +66,7 @@ you must override the helper script arguments or invoke `make` manually.
 
 Clone the repo wherever you want. This document assumes:
 
-- repo root: `D:\Github\pi-pico-sbw`
+- repo root: wherever you cloned this repo (examples below use `D:\Github\pi-pico-sbw`)
 
 ### 2. Install Python
 
@@ -143,7 +143,7 @@ The Makefile in this repo defaults to:
 
 - `MPY_DIR ?= ../../micropython-tmp`
 
-Because [Makefile](D:/Github/pi-pico-sbw/mpy/Makefile) lives in `mpy/`, that
+Because [Makefile](mpy/Makefile) lives in `mpy/`, that
 default resolves to a sibling checkout:
 
 - `D:\Github\micropython-tmp`
@@ -177,13 +177,13 @@ Important note:
 
 ## Files That Control the Build
 
-- [Makefile](D:/Github/pi-pico-sbw/mpy/Makefile)
+- [Makefile](mpy/Makefile)
   - declares `MOD = sbw_native`
   - declares `SRC = sbw_native.c`
   - declares `ARCH = armv7m`
   - includes `$(MPY_DIR)/py/dynruntime.mk`
 
-- [build-mpy-native.ps1](D:/Github/pi-pico-sbw/tools/build-mpy-native.ps1)
+- [build-mpy-native.ps1](tools/build-mpy-native.ps1)
   - Windows helper wrapper
   - launches `make` from PowerShell through `bash`
   - lets you override:
@@ -202,7 +202,7 @@ python -m pip install --user pyelftools
 
 If everything is set up correctly, the output appears at:
 
-- [sbw_native.mpy](D:/Github/pi-pico-sbw/mpy/sbw_native.mpy)
+- [sbw_native.mpy](mpy/sbw_native.mpy)
 
 Intermediates are written under:
 
@@ -221,7 +221,7 @@ If your machine does not use the current default paths, override them:
 
 Current default values are defined in:
 
-- [build-mpy-native.ps1](D:/Github/pi-pico-sbw/tools/build-mpy-native.ps1)
+- [build-mpy-native.ps1](tools/build-mpy-native.ps1)
 
 ## Manual Build Path
 
@@ -332,7 +332,7 @@ Cause:
 Fix:
 
 - install the toolchain
-- pass the correct `-ArmBinDir` to [build-mpy-native.ps1](D:/Github/pi-pico-sbw/tools/build-mpy-native.ps1)
+- pass the correct `-ArmBinDir` to [build-mpy-native.ps1](tools/build-mpy-native.ps1)
 
 ### `make` not found
 
@@ -381,7 +381,7 @@ For a fresh machine:
 4. Install `pyelftools`.
 5. Install an `arm-none-eabi` toolchain.
 6. Install `bash` + `make`.
-7. Run [build-mpy-native.ps1](D:/Github/pi-pico-sbw/tools/build-mpy-native.ps1).
-8. Confirm [sbw_native.mpy](D:/Github/pi-pico-sbw/mpy/sbw_native.mpy) exists.
+7. Run [build-mpy-native.ps1](tools/build-mpy-native.ps1).
+8. Confirm [sbw_native.mpy](mpy/sbw_native.mpy) exists.
 9. Copy the module plus the root Python files to the Pico.
-10. Run [testsuite.py](D:/Github/pi-pico-sbw/testsuite.py) on the board.
+10. Run [testsuite.py](testsuite.py) on the board.

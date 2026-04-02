@@ -1,10 +1,8 @@
 import time
 
+import sbw_native
 from sbw import SBWNative
 from sbw_config import (
-    BYPASS_EXPECTED,
-    FULL_EMULATION_MASK,
-    JTAG_ID_EXPECTED,
     REGRESSION_DESCRIPTOR_ADDR_0,
     REGRESSION_DESCRIPTOR_ADDR_1,
     REGRESSION_DESCRIPTOR_EXPECTED_0,
@@ -88,13 +86,13 @@ def run_regression():
     sbw.power_on()
     try:
         ok, jtag_id = sbw.read_id()
-        assert ok and jtag_id == JTAG_ID_EXPECTED
+        assert ok and jtag_id == sbw_native.JTAG_ID_EXPECTED
 
         ok, bypass = sbw.bypass_test()
-        assert ok and bypass == BYPASS_EXPECTED
+        assert ok and bypass == sbw_native.BYPASS_EXPECTED
 
         ok, control_capture = sbw.sync_and_por()
-        assert ok and (control_capture & FULL_EMULATION_MASK) == FULL_EMULATION_MASK
+        assert ok and (control_capture & sbw_native.FULL_EMULATION_MASK) == sbw_native.FULL_EMULATION_MASK
 
         ok, readback = sbw.write_mem16(REGRESSION_RAM_ADDR_0, REGRESSION_RAM_VALUE_0)
         assert ok and readback == REGRESSION_RAM_VALUE_0

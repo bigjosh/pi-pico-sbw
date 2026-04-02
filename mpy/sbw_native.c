@@ -89,20 +89,6 @@ static inline void sbw_irq_enable(void) {
     __asm__ volatile ("cpsie i\n" ::: "memory");
 }
 
-static void sbw_parse_hw(mp_obj_t hw_in, uint32_t *clk, uint32_t *dio) {
-    size_t len = 0;
-    mp_obj_t *items = NULL;
-    mp_obj_get_array(hw_in, &len, &items);
-    if (len != 2) {
-        mp_raise_ValueError("hw tuple must have 2 items");
-    }
-    *clk = (uint32_t)mp_obj_get_int_truncated(items[0]);
-    *dio = (uint32_t)mp_obj_get_int_truncated(items[1]);
-    if (*clk == 0 || *dio == 0) {
-        mp_raise_ValueError("hw masks must be non-zero");
-    }
-}
-
 static void sbw_hw_init(const uint32_t clk, const uint32_t dio) {
     SIO_BASE[SIO_GPIO_OE_SET] = clk;
     SIO_BASE[SIO_GPIO_OE_CLR] = dio;
@@ -793,9 +779,9 @@ static mp_obj_t sbw_make_bool_bytes(bool ok, const uint8_t *data, size_t len) {
     return mp_obj_new_tuple(2, items);
 }
 
-static mp_obj_t sbw_native_read_id(mp_obj_t hw_in) {
-    uint32_t clk, dio;
-    sbw_parse_hw(hw_in, &clk, &dio);
+static mp_obj_t sbw_native_read_id(mp_obj_t clk_in, mp_obj_t dio_in) {
+    const uint32_t clk = (uint32_t)mp_obj_get_int_truncated(clk_in);
+    const uint32_t dio = (uint32_t)mp_obj_get_int_truncated(dio_in);
     sbw_hw_init(clk, dio);
 
     uint8_t last_id = 0;
@@ -811,11 +797,11 @@ static mp_obj_t sbw_native_read_id(mp_obj_t hw_in) {
     }
     return sbw_make_bool_u8(ok, last_id);
 }
-static MP_DEFINE_CONST_FUN_OBJ_1(sbw_native_read_id_obj, sbw_native_read_id);
+static MP_DEFINE_CONST_FUN_OBJ_2(sbw_native_read_id_obj, sbw_native_read_id);
 
-static mp_obj_t sbw_native_bypass_test(mp_obj_t hw_in) {
-    uint32_t clk, dio;
-    sbw_parse_hw(hw_in, &clk, &dio);
+static mp_obj_t sbw_native_bypass_test(mp_obj_t clk_in, mp_obj_t dio_in) {
+    const uint32_t clk = (uint32_t)mp_obj_get_int_truncated(clk_in);
+    const uint32_t dio = (uint32_t)mp_obj_get_int_truncated(dio_in);
     sbw_hw_init(clk, dio);
 
     uint16_t captured = 0;
@@ -832,11 +818,11 @@ static mp_obj_t sbw_native_bypass_test(mp_obj_t hw_in) {
     }
     return sbw_make_bool_u16(ok, captured);
 }
-static MP_DEFINE_CONST_FUN_OBJ_1(sbw_native_bypass_test_obj, sbw_native_bypass_test);
+static MP_DEFINE_CONST_FUN_OBJ_2(sbw_native_bypass_test_obj, sbw_native_bypass_test);
 
-static mp_obj_t sbw_native_sync_and_por(mp_obj_t hw_in) {
-    uint32_t clk, dio;
-    sbw_parse_hw(hw_in, &clk, &dio);
+static mp_obj_t sbw_native_sync_and_por(mp_obj_t clk_in, mp_obj_t dio_in) {
+    const uint32_t clk = (uint32_t)mp_obj_get_int_truncated(clk_in);
+    const uint32_t dio = (uint32_t)mp_obj_get_int_truncated(dio_in);
     sbw_hw_init(clk, dio);
 
     uint16_t capture = 0;
@@ -851,11 +837,11 @@ static mp_obj_t sbw_native_sync_and_por(mp_obj_t hw_in) {
     }
     return sbw_make_bool_u16(ok, capture);
 }
-static MP_DEFINE_CONST_FUN_OBJ_1(sbw_native_sync_and_por_obj, sbw_native_sync_and_por);
+static MP_DEFINE_CONST_FUN_OBJ_2(sbw_native_sync_and_por_obj, sbw_native_sync_and_por);
 
-static mp_obj_t sbw_native_read_mem16(mp_obj_t hw_in, mp_obj_t address_in) {
-    uint32_t clk, dio;
-    sbw_parse_hw(hw_in, &clk, &dio);
+static mp_obj_t sbw_native_read_mem16(mp_obj_t clk_in, mp_obj_t dio_in, mp_obj_t address_in) {
+    const uint32_t clk = (uint32_t)mp_obj_get_int_truncated(clk_in);
+    const uint32_t dio = (uint32_t)mp_obj_get_int_truncated(dio_in);
     sbw_hw_init(clk, dio);
 
     const uint32_t address = (uint32_t)mp_obj_get_int_truncated(address_in);
@@ -871,15 +857,15 @@ static mp_obj_t sbw_native_read_mem16(mp_obj_t hw_in, mp_obj_t address_in) {
     }
     return sbw_make_bool_u16(ok, data);
 }
-static MP_DEFINE_CONST_FUN_OBJ_2(sbw_native_read_mem16_obj, sbw_native_read_mem16);
+static MP_DEFINE_CONST_FUN_OBJ_3(sbw_native_read_mem16_obj, sbw_native_read_mem16);
 
-static mp_obj_t sbw_native_read_block16(mp_obj_t hw_in, mp_obj_t address_in, mp_obj_t words_in) {
-    uint32_t clk, dio;
-    sbw_parse_hw(hw_in, &clk, &dio);
+static mp_obj_t sbw_native_read_block16(size_t n_args, const mp_obj_t *args) {
+    const uint32_t clk = (uint32_t)mp_obj_get_int_truncated(args[0]);
+    const uint32_t dio = (uint32_t)mp_obj_get_int_truncated(args[1]);
     sbw_hw_init(clk, dio);
 
-    const uint32_t address = (uint32_t)mp_obj_get_int_truncated(address_in);
-    const size_t word_count = (size_t)mp_obj_get_int_truncated(words_in);
+    const uint32_t address = (uint32_t)mp_obj_get_int_truncated(args[2]);
+    const size_t word_count = (size_t)mp_obj_get_int_truncated(args[3]);
     uint16_t *buffer = NULL;
     bool ok = false;
 
@@ -902,15 +888,15 @@ static mp_obj_t sbw_native_read_block16(mp_obj_t hw_in, mp_obj_t address_in, mp_
     }
     return result;
 }
-static MP_DEFINE_CONST_FUN_OBJ_3(sbw_native_read_block16_obj, sbw_native_read_block16);
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(sbw_native_read_block16_obj, 4, 4, sbw_native_read_block16);
 
-static mp_obj_t sbw_native_write_mem16(mp_obj_t hw_in, mp_obj_t address_in, mp_obj_t value_in) {
-    uint32_t clk, dio;
-    sbw_parse_hw(hw_in, &clk, &dio);
+static mp_obj_t sbw_native_write_mem16(size_t n_args, const mp_obj_t *args) {
+    const uint32_t clk = (uint32_t)mp_obj_get_int_truncated(args[0]);
+    const uint32_t dio = (uint32_t)mp_obj_get_int_truncated(args[1]);
     sbw_hw_init(clk, dio);
 
-    const uint32_t address = (uint32_t)mp_obj_get_int_truncated(address_in);
-    const uint16_t value = (uint16_t)mp_obj_get_int_truncated(value_in);
+    const uint32_t address = (uint32_t)mp_obj_get_int_truncated(args[2]);
+    const uint16_t value = (uint16_t)mp_obj_get_int_truncated(args[3]);
     uint16_t readback = 0;
     bool ok = false;
     for (uint32_t attempt = 0; attempt < SBW_JTAG_ATTEMPTS; ++attempt) {
@@ -926,16 +912,16 @@ static mp_obj_t sbw_native_write_mem16(mp_obj_t hw_in, mp_obj_t address_in, mp_o
     }
     return sbw_make_bool_u16(ok, readback);
 }
-static MP_DEFINE_CONST_FUN_OBJ_3(sbw_native_write_mem16_obj, sbw_native_write_mem16);
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(sbw_native_write_mem16_obj, 4, 4, sbw_native_write_mem16);
 
-static mp_obj_t sbw_native_write_block16(mp_obj_t hw_in, mp_obj_t address_in, mp_obj_t data_in) {
-    uint32_t clk, dio;
-    sbw_parse_hw(hw_in, &clk, &dio);
+static mp_obj_t sbw_native_write_block16(size_t n_args, const mp_obj_t *args) {
+    const uint32_t clk = (uint32_t)mp_obj_get_int_truncated(args[0]);
+    const uint32_t dio = (uint32_t)mp_obj_get_int_truncated(args[1]);
     sbw_hw_init(clk, dio);
 
     mp_buffer_info_t bufinfo;
-    const uint32_t address = (uint32_t)mp_obj_get_int_truncated(address_in);
-    mp_get_buffer_raise(data_in, &bufinfo, MP_BUFFER_READ);
+    const uint32_t address = (uint32_t)mp_obj_get_int_truncated(args[2]);
+    mp_get_buffer_raise(args[3], &bufinfo, MP_BUFFER_READ);
 
     if ((bufinfo.len & 1u) != 0) {
         mp_raise_ValueError("block data length must be even");
@@ -967,7 +953,7 @@ static mp_obj_t sbw_native_write_block16(mp_obj_t hw_in, mp_obj_t address_in, mp
     }
     return mp_obj_new_bool(ok);
 }
-static MP_DEFINE_CONST_FUN_OBJ_3(sbw_native_write_block16_obj, sbw_native_write_block16);
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(sbw_native_write_block16_obj, 4, 4, sbw_native_write_block16);
 
 mp_obj_t mpy_init(mp_obj_fun_bc_t *self, size_t n_args, size_t n_kw, mp_obj_t *args) {
     MP_DYNRUNTIME_INIT_ENTRY
@@ -980,6 +966,10 @@ mp_obj_t mpy_init(mp_obj_fun_bc_t *self, size_t n_args, size_t n_kw, mp_obj_t *a
     mp_store_global(MP_QSTR_read_block16, MP_OBJ_FROM_PTR(&sbw_native_read_block16_obj));
     mp_store_global(MP_QSTR_write_block16, MP_OBJ_FROM_PTR(&sbw_native_write_block16_obj));
     mp_store_global(MP_QSTR_SYS_CLK_HZ, mp_obj_new_int_from_uint(SBW_SYS_CLK_HZ));
+    mp_store_global(MP_QSTR_JTAG_ID_EXPECTED, mp_obj_new_int_from_uint(SBW_JTAG_ID_EXPECTED));
+    mp_store_global(MP_QSTR_BYPASS_PATTERN, mp_obj_new_int_from_uint(SBW_BYPASS_SMOKE_PATTERN));
+    mp_store_global(MP_QSTR_BYPASS_EXPECTED, mp_obj_new_int_from_uint(SBW_BYPASS_SMOKE_EXPECTED));
+    mp_store_global(MP_QSTR_FULL_EMULATION_MASK, mp_obj_new_int_from_uint(SBW_JTAG_FULL_EMULATION_MASK));
 
     MP_DYNRUNTIME_INIT_EXIT
 }

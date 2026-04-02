@@ -11,22 +11,6 @@ SBW_PIN_TARGET_POWER = const(4)
 
 SBW_TARGET_POWER_SETTLE_MS = const(20)
 
-SIO_BASE = const(0xD000_0000)
-GPIO_OUT_ADDR = const(SIO_BASE + 0x10)
-GPIO_OUT_SET_ADDR = const(SIO_BASE + 0x18)
-GPIO_OE_ADDR = const(SIO_BASE + 0x30)
-GPIO_OE_SET_ADDR = const(SIO_BASE + 0x38)
-GPIO_OE_CLR_ADDR = const(SIO_BASE + 0x40)
-
-CLOCK_MASK = const(1 << SBW_PIN_CLOCK)
-DATA_MASK = const(1 << SBW_PIN_DATA)
-POWER_MASK = const(1 << SBW_PIN_TARGET_POWER)
-
-DEFAULT_HW = (
-    CLOCK_MASK,
-    DATA_MASK,
-)
-
 REGRESSION_DESCRIPTOR_ADDR_0 = const(0x1A00)
 REGRESSION_DESCRIPTOR_EXPECTED_0 = const(0x0606)
 REGRESSION_DESCRIPTOR_ADDR_1 = const(0x1A14)
@@ -37,11 +21,6 @@ REGRESSION_RAM_ADDR_1 = const(0x2002)
 REGRESSION_RAM_VALUE_1 = const(0xA55A)
 REGRESSION_FRAM_ADDR = const(0xC400)
 REGRESSION_FRAM_VALUE = const(0x1234)
-
-JTAG_ID_EXPECTED = const(0x98)
-BYPASS_PATTERN = const(0xA55A)
-BYPASS_EXPECTED = const(0x52AD)
-FULL_EMULATION_MASK = const(0x0301)
 
 
 def current_sys_clk_hz():
@@ -57,6 +36,7 @@ def ensure_system_clock():
     if actual != SBW_SYS_CLK_HZ:
         raise RuntimeError("expected 150000000 Hz system clock, got %d Hz" % actual)
     return actual
+
 
 def bytes_to_words_le(data):
     words = []

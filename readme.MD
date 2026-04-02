@@ -6,21 +6,21 @@ The active architecture is:
 
 - MicroPython for fixture orchestration
 - a native `.mpy` module in C for all timing-critical `SBW` and `JTAG` work
-- direct MMIO writes to `RP2350` `SIO` registers
+- direct MMIO writes to `RP2350` `SIO` registers (base address hardcoded in C)
 - no `PIO`
 
 The project is intentionally narrow. It is specialized for the exact target and programming flow we have been validating on the bench.
 
 ## Current State
 
-The live, bench-validated path is the MicroPython app at the repo root, backed by the native-module build area in [mpy](D:/Github/pi-pico-sbw/mpy).
+The live, bench-validated path is the MicroPython app at the repo root, backed by the native-module build area in [mpy/](mpy/).
 
-The repo now also contains the first production-oriented TSL programmer app:
+The repo also contains the production-oriented TSL programmer app:
 
-- local TI-TXT firmware asset: [tsl-calibre-msp.txt](D:/Github/pi-pico-sbw/tsl-calibre-msp.txt)
-- programming workflow: [program.py](D:/Github/pi-pico-sbw/program.py)
-- boot entrypoint: [main.py](D:/Github/pi-pico-sbw/main.py)
-- retained bench shell: [debug_shell.py](D:/Github/pi-pico-sbw/debug_shell.py)
+- local TI-TXT firmware asset: [tsl-calibre-msp.txt](tsl-calibre-msp.txt)
+- programming workflow: [program.py](program.py)
+- boot entrypoint: [main.py](main.py)
+- retained bench shell: [debug_shell.py](debug_shell.py)
 
 Latest verified hardware results on the wired target:
 
@@ -32,40 +32,35 @@ Latest verified hardware results on the wired target:
 - `read-block16 0x1a00 11` -> descriptor span with `0x0606` at `0x1A00` and `0x0811` at `0x1A14`
 - RAM write/readback passes at `0x2000` and `0x2002`
 - Python memory smoke write/read/restore passes at `0xC400`
-- Python round-trip block benchmark for `10,240` bytes returned:
-  - `write1=135,506 us`
-  - `read1=136,416 us`
-  - `write2=135,392 us`
-  - `read2=136,275 us`
-
-That is about:
-
-- `74 KiB/s` write throughput
-- `73 KiB/s` readback throughput
+- Python round-trip block benchmark for `10,240` bytes:
+  - `~112 ms` per write pass
+  - `~114 ms` per read pass
+  - `~90 KiB/s` write throughput
+  - `~88 KiB/s` read throughput
 
 ## Repo Layout
 
-- [mpy/sbw_native.c](D:/Github/pi-pico-sbw/mpy/sbw_native.c)
-  Native MicroPython module. Owns the `SBW` transport, `JTAG` sequencing, and general target memory read/write primitives. It does not own benchmark policy, smoke-test policy, or timing.
-- [mpy/SBW_NATIVE_API.md](D:/Github/pi-pico-sbw/mpy/SBW_NATIVE_API.md)
+- [mpy/sbw_native.c](mpy/sbw_native.c)
+  Native MicroPython module. Owns the `SBW` transport, `JTAG` sequencing, and general target memory read/write primitives. SIO base address is hardcoded; GPIO pin masks are passed from Python.
+- [mpy/SBW_NATIVE_API.md](mpy/SBW_NATIVE_API.md)
   Reference for the public native-module API exposed to Python.
-- [sbw_config.py](D:/Github/pi-pico-sbw/sbw_config.py)
-  Hardware constants, `RP2350` `SIO` MMIO addresses, regression constants, and the `150 MHz` clock setup/verification logic.
-- [sbw.py](D:/Github/pi-pico-sbw/sbw.py)
+- [sbw_config.py](sbw_config.py)
+  Hardware constants, pin assignments, regression constants, and the `150 MHz` clock setup/verification logic.
+- [sbw.py](sbw.py)
   Thin Python wrapper around the native module plus target power control and byte-level read/write helpers.
-- [program.py](D:/Github/pi-pico-sbw/program.py)
+- [program.py](program.py)
   Production TSL programming app. Loads the TI-TXT image, writes the timestamp and firmware blocks separately, verifies each block by readback, and power-cycles the target to run it briefly.
-- [main.py](D:/Github/pi-pico-sbw/main.py)
+- [main.py](main.py)
   Boot entrypoint for the production programmer loop.
-- [debug_shell.py](D:/Github/pi-pico-sbw/debug_shell.py)
+- [debug_shell.py](debug_shell.py)
   Interactive bench shell preserved from the earlier development workflow.
-- [testsuite.py](D:/Github/pi-pico-sbw/testsuite.py)
+- [testsuite.py](testsuite.py)
   Regression and Python-side benchmark entry points.
-- [mpy/README.md](D:/Github/pi-pico-sbw/mpy/README.md)
+- [mpy/README.md](mpy/README.md)
   Native-module build and deployment notes.
-- [tools/build-mpy-native.ps1](D:/Github/pi-pico-sbw/tools/build-mpy-native.ps1)
+- [tools/build-mpy-native.ps1](tools/build-mpy-native.ps1)
   Windows helper to build the native `.mpy`.
-- [status.md](D:/Github/pi-pico-sbw/status.md)
+- [status.md](status.md)
   Current project status and file-by-file handoff.
 
 ## Hardware
@@ -132,7 +127,7 @@ Then copy these files to the Pico running MicroPython:
 - `testsuite.py`
 - `tsl-calibre-msp.txt`
 
-On boot, `main.py` now starts the production TSL programmer loop automatically.
+On boot, `main.py` starts the production TSL programmer loop automatically.
 
 For the retained debug shell:
 
@@ -143,7 +138,7 @@ debug_shell.repl()
 
 ## Primary References
 
-The implementation was built from TI primary documentation in [docs](D:/Github/pi-pico-sbw/docs):
+The implementation was built from TI primary documentation in [docs/](docs/):
 
 - `Programming over JTAG` (`SLAU320`)
 - `MSP430FR4xx and MSP430FR2xx Family User's Guide` (`SLAU445`)

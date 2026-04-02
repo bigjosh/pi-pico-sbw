@@ -4,51 +4,28 @@ This file documents the MicroPython native module source and build output for `s
 
 This implements a bit-banged Spy-Bi-Wire driver. It must be in C to meet timing requirements. It does occasionally disable IRQs, but only for the very short SBWTCK low phases.
 
-The intended consumer is the Python layer in [sbw.py](D:/Github/pi-pico-sbw/sbw.py). This file documents the API that the Python side is allowed to rely on.
+The intended consumer is the Python layer in [sbw.py](../sbw.py). This file documents the API that the Python side is allowed to rely on.
 
 During an active SBW/JTAG session, the native transport keeps `SBWTDIO` actively driven between logical bit cycles. It only releases the line for the `TDO` slot itself and for explicit session-boundary handling such as `release`/entry.
 
 ## Module Name
 
 - import name: `sbw_native`
-- build artifact: [sbw_native.mpy](D:/Github/pi-pico-sbw/mpy/sbw_native.mpy)
-- implementation: [sbw_native.c](D:/Github/pi-pico-sbw/mpy/sbw_native.c)
+- build artifact: [sbw_native.mpy](sbw_native.mpy)
+- implementation: [sbw_native.c](sbw_native.c)
 
-## Hardware Descriptor
+## Pin Mask Arguments
 
-Every native function takes the hardware descriptor tuple as its first argument.
+Every native function takes `clk` and `dio` as its first two arguments:
 
-Tuple layout:
+- `clk`: one-hot bitmask for `SBWTCK`
+- `dio`: one-hot bitmask for `SBWTDIO`
 
-```python
-(
-    gpio_in_addr,
-    gpio_out_set_addr,
-    gpio_out_clr_addr,
-    gpio_oe_set_addr,
-    gpio_oe_clr_addr,
-    clock_mask,
-    data_mask,
-)
-```
+The SIO base address (`0xD0000000`) is hardcoded in the native module since it is fixed for the RP2350.
 
-Field meanings:
+Power control is not part of the native API; Python owns target power switching.
 
-- `gpio_in_addr`: address of the `SIO GPIO_IN` register
-- `gpio_out_set_addr`: address of the `SIO GPIO_OUT_SET` register
-- `gpio_out_clr_addr`: address of the `SIO GPIO_OUT_CLR` register
-- `gpio_oe_set_addr`: address of the `SIO GPIO_OE_SET` register
-- `gpio_oe_clr_addr`: address of the `SIO GPIO_OE_CLR` register
-- `clock_mask`: one-hot mask for `SBWTCK`
-- `data_mask`: one-hot mask for `SBWTDIO`
-
-Constraints:
-
-- tuple length must be exactly `7`
-- `clock_mask` and `data_mask` must be non-zero
-- power control is not part of the native tuple; Python owns target power switching
-
-The canonical tuple definition lives in [sbw_config.py](D:/Github/pi-pico-sbw/sbw_config.py).
+The canonical mask constants live in [sbw_config.py](../sbw_config.py) as `CLOCK_MASK` and `DATA_MASK`.
 
 ## Exported Constants
 
@@ -60,36 +37,40 @@ This is an informational convenience constant for Python. It does not change run
 
 ## Exported Functions
 
-### `read_id(hw) -> (ok, jtag_id)`
+### `read_id(clk, dio) -> (ok, jtag_id)`
 
-- `hw`: 7-item hardware tuple
+- `clk`: clock pin mask
+- `dio`: data pin mask
 - returns:
   - `ok`: `bool`
   - `jtag_id`: `int`
 
 Performs SBW session bring-up and reads the JTAG ID.
 
-### `bypass_test(hw) -> (ok, captured)`
+### `bypass_test(clk, dio) -> (ok, captured)`
 
-- `hw`: 7-item hardware tuple
+- `clk`: clock pin mask
+- `dio`: data pin mask
 - returns:
   - `ok`: `bool`
   - `captured`: `int`
 
 Runs the BYPASS smoke test using the fixed native pattern.
 
-### `sync_and_por(hw) -> (ok, control_capture)`
+### `sync_and_por(clk, dio) -> (ok, control_capture)`
 
-- `hw`: 7-item hardware tuple
+- `clk`: clock pin mask
+- `dio`: data pin mask
 - returns:
   - `ok`: `bool`
   - `control_capture`: `int`
 
 Synchronizes JTAG, executes the POR flow, and returns the captured control signal word.
 
-### `read_mem16(hw, address) -> (ok, value)`
+### `read_mem16(clk, dio, address) -> (ok, value)`
 
-- `hw`: 7-item hardware tuple
+- `clk`: clock pin mask
+- `dio`: data pin mask
 - `address`: target address
 - returns:
   - `ok`: `bool`
@@ -97,9 +78,10 @@ Synchronizes JTAG, executes the POR flow, and returns the captured control signa
 
 Reads a single 16-bit word using the non-quick path.
 
-### `write_mem16(hw, address, value) -> (ok, readback)`
+### `write_mem16(clk, dio, address, value) -> (ok, readback)`
 
-- `hw`: 7-item hardware tuple
+- `clk`: clock pin mask
+- `dio`: data pin mask
 - `address`: target address
 - `value`: 16-bit word
 - returns:
@@ -108,9 +90,10 @@ Reads a single 16-bit word using the non-quick path.
 
 Writes a single 16-bit word, reads it back, and returns the readback value.
 
-### `read_block16(hw, address, words) -> (ok, data_bytes)`
+### `read_block16(clk, dio, address, words) -> (ok, data_bytes)`
 
-- `hw`: 7-item hardware tuple
+- `clk`: clock pin mask
+- `dio`: data pin mask
 - `address`: start address
 - `words`: number of 16-bit words
 - returns:
@@ -121,9 +104,10 @@ This is the native block-read API. On FR4133 the underlying Data Quick read
 sequence is valid across the target memory map, so this routine is not limited
 to FRAM.
 
-### `write_block16(hw, address, data_bytes) -> bool`
+### `write_block16(clk, dio, address, data_bytes) -> bool`
 
-- `hw`: 7-item hardware tuple
+- `clk`: clock pin mask
+- `dio`: data pin mask
 - `address`: start address
 - `data_bytes`: even-length bytes-like object containing little-endian 16-bit words
 - returns:
@@ -186,7 +170,7 @@ The actual safety requirement is:
 
 If the MCU is clocked faster than `SYS_CLK_HZ`, the delay loops in the native module get shorter in real time and can violate `SBW` timing minimums. Running slower than `SYS_CLK_HZ` is timing-safe, but slower overall.
 
-The caller must enforce this before calling the native API. The current enforcement lives in [sbw_config.py](D:/Github/pi-pico-sbw/sbw_config.py) and is called by [sbw.py](D:/Github/pi-pico-sbw/sbw.py).
+The caller must enforce this before calling the native API. The current enforcement lives in [sbw_config.py](../sbw_config.py) and is called by [sbw.py](../sbw.py).
 
 Example:
 

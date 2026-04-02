@@ -7,7 +7,7 @@ except ImportError:
     import select
 
 from sbw import SBWNative
-from sbw_config import JTAG_ID_EXPECTED
+import sbw_native
 
 
 FIRMWARE_FILE_NAME = "tsl-calibre-msp.txt"
@@ -162,8 +162,8 @@ def program_once(sbw, firmware_blocks, now=None):
     sbw.power_on()
     try:
         ok, jtag_id = sbw.read_id()
-        if not ok or jtag_id != JTAG_ID_EXPECTED:
-            raise RuntimeError("expected JTAG ID 0x%02X, found 0x%02X" % (JTAG_ID_EXPECTED, jtag_id))
+        if not ok or jtag_id != sbw_native.JTAG_ID_EXPECTED:
+            raise RuntimeError("expected JTAG ID 0x%02X, found 0x%02X" % (sbw_native.JTAG_ID_EXPECTED, jtag_id))
 
         print("Reading device descriptor...")
         ok, dd_bytes = sbw.read_bytes(DEVICE_DESCRIPTOR_ADDRESS, DEVICE_DESCRIPTOR_LENGTH)
