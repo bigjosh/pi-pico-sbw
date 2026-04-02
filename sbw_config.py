@@ -25,21 +25,13 @@ DATA_MASK = const(1 << SBW_PIN_DATA)
 POWER_MASK = const(1 << SBW_PIN_TARGET_POWER)
 
 HW_TUPLE_LAYOUT = (
-    "gpio_in_addr",
-    "gpio_out_set_addr",
-    "gpio_out_clr_addr",
-    "gpio_oe_set_addr",
-    "gpio_oe_clr_addr",
+    "sio_base",
     "clock_mask",
     "data_mask",
 )
 
 DEFAULT_HW = (
-    GPIO_IN_ADDR,
-    GPIO_OUT_SET_ADDR,
-    GPIO_OUT_CLR_ADDR,
-    GPIO_OE_SET_ADDR,
-    GPIO_OE_CLR_ADDR,
+    SIO_BASE,
     CLOCK_MASK,
     DATA_MASK,
 )

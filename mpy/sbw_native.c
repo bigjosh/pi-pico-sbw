@@ -42,7 +42,7 @@ enum {
 
 enum {
     SBW_ACTIVE_SLOT_LOW_CYCLES = SBW_NS_TO_CYCLES(50),
-    SBW_ACTIVE_SLOT_HIGH_CYCLES = 0,
+    SBW_ACTIVE_SLOT_HIGH_CYCLES = 20,
     SBW_EXIT_HOLD_CYCLES = SBW_NS_TO_CYCLES(200000),
     SBW_ENTRY_RST_HIGH_TEST_RESET_CYCLES = 4u * SBW_CYCLES_PER_MS,
     SBW_ENTRY_RST_HIGH_TEST_ENABLE_CYCLES = 20u * SBW_CYCLES_PER_MS,
@@ -57,18 +57,18 @@ enum {
     SBW_TMSLDH_LOW_BEFORE_DRIVE_CYCLES = SBW_ACTIVE_SLOT_LOW_CYCLES / 2u,
 };
 
-typedef struct {
-    volatile uint32_t *gpio_in;
-    volatile uint32_t *gpio_out_set;
-    volatile uint32_t *gpio_out_clr;
-    volatile uint32_t *gpio_oe_set;
-    volatile uint32_t *gpio_oe_clr;
-    uint32_t clock_mask;
-    uint32_t data_mask;
-} sbw_hw_desc_t;
+enum {
+    SIO_GPIO_IN      = 0x04 / 4,   /* SIO_BASE + 0x04 */
+    SIO_GPIO_OUT_SET = 0x18 / 4,   /* SIO_BASE + 0x18 */
+    SIO_GPIO_OUT_CLR = 0x20 / 4,   /* SIO_BASE + 0x20 */
+    SIO_GPIO_OE_SET  = 0x38 / 4,   /* SIO_BASE + 0x38 */
+    SIO_GPIO_OE_CLR  = 0x40 / 4,   /* SIO_BASE + 0x40 */
+};
 
 typedef struct {
-    sbw_hw_desc_t hw;
+    volatile uint32_t *sio;
+    uint32_t clk;
+    uint32_t data;
     bool tclk_high;
 } sbw_ctx_t;
 
@@ -102,18 +102,6 @@ static inline void sbw_irq_enable(void) {
         : "memory");
 }
 
-static inline void sbw_mmio_write(volatile uint32_t *addr, uint32_t value) {
-    *addr = value;
-}
-
-static inline uint32_t sbw_mmio_read(volatile uint32_t *addr) {
-    return *addr;
-}
-
-static inline volatile uint32_t *sbw_mmio_ptr(uint32_t address) {
-    return (volatile uint32_t *)(uintptr_t)address;
-}
-
 /*
  * Transport invariants for this file:
  *
@@ -129,58 +117,50 @@ static inline volatile uint32_t *sbw_mmio_ptr(uint32_t address) {
  * - Any helper that drives SBWTCK low must keep IRQs masked until SBWTCK is
  *   high again, or an overlong low phase can drop the active SBW session.
  */
-static void sbw_parse_hw_desc(mp_obj_t hw_in, sbw_hw_desc_t *hw) {
+static void sbw_ctx_init(sbw_ctx_t *ctx, mp_obj_t hw_in) {
     size_t len = 0;
     mp_obj_t *items = NULL;
     mp_obj_get_array(hw_in, &len, &items);
-    if (len != 7) {
-        mp_raise_ValueError("hw tuple must have 7 items");
+    if (len != 3) {
+        mp_raise_ValueError("hw tuple must have 3 items");
     }
 
-    hw->gpio_in = sbw_mmio_ptr((uint32_t)mp_obj_get_int_truncated(items[0]));
-    hw->gpio_out_set = sbw_mmio_ptr((uint32_t)mp_obj_get_int_truncated(items[1]));
-    hw->gpio_out_clr = sbw_mmio_ptr((uint32_t)mp_obj_get_int_truncated(items[2]));
-    hw->gpio_oe_set = sbw_mmio_ptr((uint32_t)mp_obj_get_int_truncated(items[3]));
-    hw->gpio_oe_clr = sbw_mmio_ptr((uint32_t)mp_obj_get_int_truncated(items[4]));
-    hw->clock_mask = (uint32_t)mp_obj_get_int_truncated(items[5]);
-    hw->data_mask = (uint32_t)mp_obj_get_int_truncated(items[6]);
-
-    if (hw->clock_mask == 0 || hw->data_mask == 0) {
-        mp_raise_ValueError("hw masks must be non-zero");
-    }
-}
-
-static void sbw_ctx_init(sbw_ctx_t *ctx, const sbw_hw_desc_t *hw) {
-    ctx->hw = *hw;
+    ctx->sio = (volatile uint32_t *)(uintptr_t)(uint32_t)mp_obj_get_int_truncated(items[0]);
+    ctx->clk = (uint32_t)mp_obj_get_int_truncated(items[1]);
+    ctx->data = (uint32_t)mp_obj_get_int_truncated(items[2]);
     ctx->tclk_high = true;
 
-    sbw_mmio_write(ctx->hw.gpio_oe_set, ctx->hw.clock_mask);
-    sbw_mmio_write(ctx->hw.gpio_oe_clr, ctx->hw.data_mask);
-    sbw_mmio_write(ctx->hw.gpio_out_clr, ctx->hw.clock_mask);
+    if (ctx->clk == 0 || ctx->data == 0) {
+        mp_raise_ValueError("hw masks must be non-zero");
+    }
+
+    ctx->sio[SIO_GPIO_OE_SET] = ctx->clk;
+    ctx->sio[SIO_GPIO_OE_CLR] = ctx->data;
+    ctx->sio[SIO_GPIO_OUT_CLR] = ctx->clk;
 }
 
 static inline void sbw_clock_drive(sbw_ctx_t *ctx, bool high) {
     if (high) {
-        sbw_mmio_write(ctx->hw.gpio_out_set, ctx->hw.clock_mask);
+        ctx->sio[SIO_GPIO_OUT_SET] = ctx->clk;
     } else {
-        sbw_mmio_write(ctx->hw.gpio_out_clr, ctx->hw.clock_mask);
+        ctx->sio[SIO_GPIO_OUT_CLR] = ctx->clk;
     }
 }
 
 static inline void sbw_data_drive(sbw_ctx_t *ctx, bool level) {
     if (level) {
-        sbw_mmio_write(ctx->hw.gpio_out_set, ctx->hw.data_mask);
+        ctx->sio[SIO_GPIO_OUT_SET] = ctx->data;
     } else {
-        sbw_mmio_write(ctx->hw.gpio_out_clr, ctx->hw.data_mask);
+        ctx->sio[SIO_GPIO_OUT_CLR] = ctx->data;
     }
 }
 
 static inline void sbw_data_release_now(sbw_ctx_t *ctx) {
-    sbw_mmio_write(ctx->hw.gpio_oe_clr, ctx->hw.data_mask);
+    ctx->sio[SIO_GPIO_OE_CLR] = ctx->data;
 }
 
 static inline bool sbw_data_read(const sbw_ctx_t *ctx) {
-    return (sbw_mmio_read(ctx->hw.gpio_in) & ctx->hw.data_mask) != 0;
+    return (ctx->sio[SIO_GPIO_IN] & ctx->data) != 0;
 }
 
 static inline void sbw_low_phase_begin(sbw_ctx_t *ctx) {
@@ -210,7 +190,7 @@ static void sbw_entry_rst_high(sbw_ctx_t *ctx) {
     sbw_clock_drive(ctx, false);
     sbw_wait_cycles(SBW_ENTRY_RST_HIGH_TEST_RESET_CYCLES);
 
-    sbw_mmio_write(ctx->hw.gpio_oe_set, ctx->hw.data_mask);
+    ctx->sio[SIO_GPIO_OE_SET] = ctx->data;
     sbw_data_drive(ctx, true);
     sbw_clock_drive(ctx, true);
     sbw_wait_cycles(SBW_ENTRY_RST_HIGH_TEST_ENABLE_CYCLES);
@@ -226,7 +206,7 @@ static void sbw_entry_rst_low(sbw_ctx_t *ctx) {
     sbw_clock_drive(ctx, false);
     sbw_wait_cycles(SBW_ENTRY_RST_LOW_TEST_RESET_CYCLES);
 
-    sbw_mmio_write(ctx->hw.gpio_oe_set, ctx->hw.data_mask);
+    ctx->sio[SIO_GPIO_OE_SET] = ctx->data;
     sbw_data_drive(ctx, false);
     sbw_wait_cycles(SBW_ENTRY_RST_LOW_HOLD_RESET_CYCLES);
 
@@ -251,94 +231,87 @@ static void sbw_start_mode(sbw_ctx_t *ctx, bool rst_low) {
 }
 
 static inline bool sbw_io_bit(sbw_ctx_t *ctx, bool tms, bool tdi) {
-    volatile uint32_t *const gpio_in = ctx->hw.gpio_in;
-    volatile uint32_t *const gpio_out_set = ctx->hw.gpio_out_set;
-    volatile uint32_t *const gpio_out_clr = ctx->hw.gpio_out_clr;
-    volatile uint32_t *const gpio_oe_clr = ctx->hw.gpio_oe_clr;
-    volatile uint32_t *const gpio_oe_set = ctx->hw.gpio_oe_set;
-    const uint32_t clock_mask = ctx->hw.clock_mask;
-    const uint32_t data_mask = ctx->hw.data_mask;
+    volatile uint32_t *const sio = ctx->sio;
+    const uint32_t clk = ctx->clk;
+    const uint32_t data = ctx->data;
 
     // One logical SBW bit is three clocked sub-slots on SBWTDIO: drive TMS, drive TDI, then
     // release the line so the target can return TDO on the third low pulse.
     // Active-session callers keep SBWTDIO driven between logical bits, so this sequence starts
     // with the master already owning the bus.
     // Slot 1: present TMS while we still own SBWTDIO.
-    sbw_mmio_write(tms ? gpio_out_set : gpio_out_clr, data_mask);
+    sio[tms ? SIO_GPIO_OUT_SET : SIO_GPIO_OUT_CLR] = data;
     sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
     sbw_irq_disable();
-    sbw_mmio_write(gpio_out_clr, clock_mask);
+    sio[SIO_GPIO_OUT_CLR] = clk;
     sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES);
-    sbw_mmio_write(gpio_out_set, clock_mask);
+    sio[SIO_GPIO_OUT_SET] = clk;
     sbw_irq_enable();
 
     // Slot 2: present TDI. In Run-Test/Idle this slot also carries TCLK state.
-    sbw_mmio_write(tdi ? gpio_out_set : gpio_out_clr, data_mask);
+    sio[tdi ? SIO_GPIO_OUT_SET : SIO_GPIO_OUT_CLR] = data;
     sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
     sbw_irq_disable();
-    sbw_mmio_write(gpio_out_clr, clock_mask);
+    sio[SIO_GPIO_OUT_CLR] = clk;
     sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES);
-    sbw_mmio_write(gpio_out_set, clock_mask);
+    sio[SIO_GPIO_OUT_SET] = clk;
     sbw_irq_enable();
 
     // Slot 3: release SBWTDIO before the falling edge so the target can drive TDO.
     // Once SBWTCK returns high, the target should have released the line, so we can
     // immediately take ownership again instead of leaving the bus floating between bits.
-    sbw_mmio_write(gpio_oe_clr, data_mask);
+    sio[SIO_GPIO_OE_CLR] = data;
     sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
     sbw_irq_disable();
-    sbw_mmio_write(gpio_out_clr, clock_mask);
+    sio[SIO_GPIO_OUT_CLR] = clk;
     sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES);
-    const bool tdo = (sbw_mmio_read(gpio_in) & data_mask) != 0;
-    sbw_mmio_write(gpio_out_set, clock_mask);
-    sbw_mmio_write(gpio_oe_set, data_mask);
+    const bool tdo = (sio[SIO_GPIO_IN] & data) != 0;
+    sio[SIO_GPIO_OUT_SET] = clk;
+    sio[SIO_GPIO_OE_SET] = data;
     sbw_irq_enable();
     return tdo;
 }
 
 static inline void sbw_tclk_set(sbw_ctx_t *ctx, bool high) {
-    volatile uint32_t *const gpio_out_set = ctx->hw.gpio_out_set;
-    volatile uint32_t *const gpio_out_clr = ctx->hw.gpio_out_clr;
-    volatile uint32_t *const gpio_oe_clr = ctx->hw.gpio_oe_clr;
-    volatile uint32_t *const gpio_oe_set = ctx->hw.gpio_oe_set;
-    const uint32_t clock_mask = ctx->hw.clock_mask;
-    const uint32_t data_mask = ctx->hw.data_mask;
+    volatile uint32_t *const sio = ctx->sio;
+    const uint32_t clk = ctx->clk;
+    const uint32_t data = ctx->data;
 
     if (ctx->tclk_high) {
-        sbw_mmio_write(gpio_out_clr, data_mask);
+        sio[SIO_GPIO_OUT_CLR] = data;
         sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
         sbw_irq_disable();
-        sbw_mmio_write(gpio_out_clr, clock_mask);
+        sio[SIO_GPIO_OUT_CLR] = clk;
         sbw_wait_cycles(SBW_TMSLDH_LOW_BEFORE_DRIVE_CYCLES);
-        sbw_mmio_write(gpio_out_set, data_mask);
+        sio[SIO_GPIO_OUT_SET] = data;
         sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES - SBW_TMSLDH_LOW_BEFORE_DRIVE_CYCLES);
-        sbw_mmio_write(gpio_out_set, clock_mask);
+        sio[SIO_GPIO_OUT_SET] = clk;
         sbw_irq_enable();
     } else {
-        sbw_mmio_write(gpio_out_clr, data_mask);
+        sio[SIO_GPIO_OUT_CLR] = data;
         sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
         sbw_irq_disable();
-        sbw_mmio_write(gpio_out_clr, clock_mask);
+        sio[SIO_GPIO_OUT_CLR] = clk;
         sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES);
-        sbw_mmio_write(gpio_out_set, clock_mask);
+        sio[SIO_GPIO_OUT_SET] = clk;
         sbw_irq_enable();
     }
 
-    sbw_mmio_write(high ? gpio_out_set : gpio_out_clr, data_mask);
+    sio[high ? SIO_GPIO_OUT_SET : SIO_GPIO_OUT_CLR] = data;
     sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
     sbw_irq_disable();
-    sbw_mmio_write(gpio_out_clr, clock_mask);
+    sio[SIO_GPIO_OUT_CLR] = clk;
     sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES);
-    sbw_mmio_write(gpio_out_set, clock_mask);
+    sio[SIO_GPIO_OUT_SET] = clk;
     sbw_irq_enable();
 
-    sbw_mmio_write(gpio_oe_clr, data_mask);
+    sio[SIO_GPIO_OE_CLR] = data;
     sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
     sbw_irq_disable();
-    sbw_mmio_write(gpio_out_clr, clock_mask);
+    sio[SIO_GPIO_OUT_CLR] = clk;
     sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES);
-    sbw_mmio_write(gpio_out_set, clock_mask);
-    sbw_mmio_write(gpio_oe_set, data_mask);
+    sio[SIO_GPIO_OUT_SET] = clk;
+    sio[SIO_GPIO_OE_SET] = data;
     sbw_irq_enable();
     ctx->tclk_high = high;
 }
@@ -887,13 +860,11 @@ static mp_obj_t sbw_make_bool_bytes(bool ok, const uint8_t *data, size_t len) {
 }
 
 static mp_obj_t sbw_native_read_id(mp_obj_t hw_in) {
-    sbw_hw_desc_t hw;
     sbw_ctx_t ctx;
     uint8_t last_id = 0;
     bool ok = false;
 
-    sbw_parse_hw_desc(hw_in, &hw);
-    sbw_ctx_init(&ctx, &hw);
+    sbw_ctx_init(&ctx, hw_in);
 
     for (uint32_t attempt = 0; attempt < SBW_JTAG_ATTEMPTS; ++attempt) {
         sbw_begin_session(&ctx);
@@ -910,13 +881,11 @@ static mp_obj_t sbw_native_read_id(mp_obj_t hw_in) {
 static MP_DEFINE_CONST_FUN_OBJ_1(sbw_native_read_id_obj, sbw_native_read_id);
 
 static mp_obj_t sbw_native_bypass_test(mp_obj_t hw_in) {
-    sbw_hw_desc_t hw;
     sbw_ctx_t ctx;
     uint16_t captured = 0;
     bool ok = false;
 
-    sbw_parse_hw_desc(hw_in, &hw);
-    sbw_ctx_init(&ctx, &hw);
+    sbw_ctx_init(&ctx, hw_in);
 
     for (uint32_t attempt = 0; attempt < SBW_JTAG_ATTEMPTS; ++attempt) {
         sbw_begin_session(&ctx);
@@ -934,13 +903,11 @@ static mp_obj_t sbw_native_bypass_test(mp_obj_t hw_in) {
 static MP_DEFINE_CONST_FUN_OBJ_1(sbw_native_bypass_test_obj, sbw_native_bypass_test);
 
 static mp_obj_t sbw_native_sync_and_por(mp_obj_t hw_in) {
-    sbw_hw_desc_t hw;
     sbw_ctx_t ctx;
     uint16_t capture = 0;
     bool ok = false;
 
-    sbw_parse_hw_desc(hw_in, &hw);
-    sbw_ctx_init(&ctx, &hw);
+    sbw_ctx_init(&ctx, hw_in);
 
     for (uint32_t attempt = 0; attempt < SBW_JTAG_ATTEMPTS; ++attempt) {
         sbw_begin_session(&ctx);
@@ -956,14 +923,12 @@ static mp_obj_t sbw_native_sync_and_por(mp_obj_t hw_in) {
 static MP_DEFINE_CONST_FUN_OBJ_1(sbw_native_sync_and_por_obj, sbw_native_sync_and_por);
 
 static mp_obj_t sbw_native_read_mem16(mp_obj_t hw_in, mp_obj_t address_in) {
-    sbw_hw_desc_t hw;
     sbw_ctx_t ctx;
     const uint32_t address = (uint32_t)mp_obj_get_int_truncated(address_in);
     uint16_t data = 0;
     bool ok = false;
 
-    sbw_parse_hw_desc(hw_in, &hw);
-    sbw_ctx_init(&ctx, &hw);
+    sbw_ctx_init(&ctx, hw_in);
 
     for (uint32_t attempt = 0; attempt < SBW_JTAG_ATTEMPTS; ++attempt) {
         sbw_begin_session(&ctx);
@@ -979,15 +944,13 @@ static mp_obj_t sbw_native_read_mem16(mp_obj_t hw_in, mp_obj_t address_in) {
 static MP_DEFINE_CONST_FUN_OBJ_2(sbw_native_read_mem16_obj, sbw_native_read_mem16);
 
 static mp_obj_t sbw_native_read_block_common(mp_obj_t hw_in, mp_obj_t address_in, mp_obj_t words_in) {
-    sbw_hw_desc_t hw;
     sbw_ctx_t ctx;
     const uint32_t address = (uint32_t)mp_obj_get_int_truncated(address_in);
     const size_t word_count = (size_t)mp_obj_get_int_truncated(words_in);
     uint16_t *buffer = NULL;
     bool ok = false;
 
-    sbw_parse_hw_desc(hw_in, &hw);
-    sbw_ctx_init(&ctx, &hw);
+    sbw_ctx_init(&ctx, hw_in);
 
     if (word_count != 0) {
         buffer = (uint16_t *)m_malloc(word_count * sizeof(uint16_t));
@@ -1015,15 +978,13 @@ static mp_obj_t sbw_native_read_block16(mp_obj_t hw_in, mp_obj_t address_in, mp_
 static MP_DEFINE_CONST_FUN_OBJ_3(sbw_native_read_block16_obj, sbw_native_read_block16);
 
 static mp_obj_t sbw_native_write_mem16(mp_obj_t hw_in, mp_obj_t address_in, mp_obj_t value_in) {
-    sbw_hw_desc_t hw;
     sbw_ctx_t ctx;
     const uint32_t address = (uint32_t)mp_obj_get_int_truncated(address_in);
     const uint16_t value = (uint16_t)mp_obj_get_int_truncated(value_in);
     uint16_t readback = 0;
     bool ok = false;
 
-    sbw_parse_hw_desc(hw_in, &hw);
-    sbw_ctx_init(&ctx, &hw);
+    sbw_ctx_init(&ctx, hw_in);
 
     for (uint32_t attempt = 0; attempt < SBW_JTAG_ATTEMPTS; ++attempt) {
         sbw_begin_session(&ctx);
@@ -1042,13 +1003,11 @@ static mp_obj_t sbw_native_write_mem16(mp_obj_t hw_in, mp_obj_t address_in, mp_o
 static MP_DEFINE_CONST_FUN_OBJ_3(sbw_native_write_mem16_obj, sbw_native_write_mem16);
 
 static mp_obj_t sbw_native_write_block16(mp_obj_t hw_in, mp_obj_t address_in, mp_obj_t data_in) {
-    sbw_hw_desc_t hw;
     sbw_ctx_t ctx;
     mp_buffer_info_t bufinfo;
     const uint32_t address = (uint32_t)mp_obj_get_int_truncated(address_in);
 
-    sbw_parse_hw_desc(hw_in, &hw);
-    sbw_ctx_init(&ctx, &hw);
+    sbw_ctx_init(&ctx, hw_in);
     mp_get_buffer_raise(data_in, &bufinfo, MP_BUFFER_READ);
 
     if ((bufinfo.len & 1u) != 0) {

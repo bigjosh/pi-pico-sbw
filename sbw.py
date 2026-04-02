@@ -33,11 +33,11 @@ class SBWNative:
     def __init__(self, hw=DEFAULT_HW, power_mask=POWER_MASK):
         ensure_system_clock()
         self.hw = tuple(hw)
-        self._clock_pin = _mask_to_pin(self.hw[5])
-        self._data_pin = _mask_to_pin(self.hw[6])
+        self._clock_pin = _mask_to_pin(self.hw[1])
+        self._data_pin = _mask_to_pin(self.hw[2])
         self._power_pin = _mask_to_pin(power_mask)
-        self._clock_mask = self.hw[5]
-        self._data_mask = self.hw[6]
+        self._clock_mask = self.hw[1]
+        self._data_mask = self.hw[2]
         self._power_mask = power_mask
         self._clock = machine.Pin(self._clock_pin, machine.Pin.OUT, value=0)
         self._data = machine.Pin(self._data_pin, machine.Pin.IN)
