@@ -193,71 +193,79 @@ static __attribute__((always_inline)) inline bool sbw_io_bit(const uint32_t clk,
     sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES);
     const bool tdo = (SIO_BASE[SIO_GPIO_IN] & dio) != 0;
     SIO_BASE[SIO_GPIO_OUT_SET] = clk;
-    SIO_BASE[SIO_GPIO_OE_SET] = dio;
     sbw_irq_enable();
+    // There should probably be a wait here for the target to release the data pin, but in practice it seems to be fast enough that we can just set it back to output immediately.
+    SIO_BASE[SIO_GPIO_OE_SET] = dio;
     return tdo;
 }
 
 // ClrTCLK: HIGH -> LOW. TMSLDH timing per SLAU320AJ 2.2.3.2.3.
+// This is tricky - the dtaa must be high coming into TDI slot and then go low in the middle of the slot
+// the set TCLK low. It is the transition that does the setting. 
+// This always sets TMS low since we will always be in run-idle when we do this (that the only time you can change TCLK). 
 static inline void sbw_clr_tclk(const uint32_t clk, const uint32_t dio) {
     // TMS slot: TMSLDH — drive low for TMS=0, back high during CLK low
     SIO_BASE[SIO_GPIO_OUT_CLR] = dio;
     sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
     sbw_irq_disable();
-    SIO_BASE[SIO_GPIO_OUT_CLR] = clk;
+    SIO_BASE[SIO_GPIO_OUT_CLR] = clk;       // Target samples TMS=0 here
     sbw_wait_cycles(SBW_TMSLDH_LOW_BEFORE_DRIVE_CYCLES);
-    SIO_BASE[SIO_GPIO_OUT_SET] = dio;
+    SIO_BASE[SIO_GPIO_OUT_SET] = dio;       // Drive TMS back high while CLK still low so it will be high coming into TDI slot
     sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES - SBW_TMSLDH_LOW_BEFORE_DRIVE_CYCLES);
     SIO_BASE[SIO_GPIO_OUT_SET] = clk;
     sbw_irq_enable();
 
-    // TDI slot: LOW = ClrTCLK
-    SIO_BASE[SIO_GPIO_OUT_CLR] = dio;
+    // TDI slot: data is already high 
     sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
     sbw_irq_disable();
     SIO_BASE[SIO_GPIO_OUT_CLR] = clk;
     sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES);
+    SIO_BASE[SIO_GPIO_OUT_CLR] = dio;   // Here data goes high->low, which sets MCLK low. 
+    sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES);    // Here we are ultra conservative since the docs arent really clear. 
     SIO_BASE[SIO_GPIO_OUT_SET] = clk;
     sbw_irq_enable();
 
     // TDO slot
-    SIO_BASE[SIO_GPIO_OE_CLR] = dio;
+    SIO_BASE[SIO_GPIO_OE_CLR] = dio;        // data pin to input
     sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
     sbw_irq_disable();
     SIO_BASE[SIO_GPIO_OUT_CLR] = clk;
     sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES);
     SIO_BASE[SIO_GPIO_OUT_SET] = clk;
+    // There should probably be a wait here for the target to release the data pin, but in practice it seems to be fast enough that we can just set it back to output immediately.
     SIO_BASE[SIO_GPIO_OE_SET] = dio;
     sbw_irq_enable();
 }
 
-// SetTCLK: LOW -> HIGH. Regular TMSL timing.
+// SetTCLK: LOW -> HIGH. See above for details (this is inverse of ClrTCLK) but easier becuase data will already be low coming into TDI
 static inline void sbw_set_tclk(const uint32_t clk, const uint32_t dio) {
-    // TMS slot: regular — dio already low from previous TDI=0
+    // TMS slot: TMSLDH — drive low for TMS=0, back high during CLK low
     SIO_BASE[SIO_GPIO_OUT_CLR] = dio;
     sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
     sbw_irq_disable();
-    SIO_BASE[SIO_GPIO_OUT_CLR] = clk;
-    sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES);
+    SIO_BASE[SIO_GPIO_OUT_CLR] = clk;       // Target samples TMS=0 here
+    sbw_wait_cycles(SBW_TMSLDH_LOW_BEFORE_DRIVE_CYCLES);
     SIO_BASE[SIO_GPIO_OUT_SET] = clk;
     sbw_irq_enable();
 
-    // TDI slot: HIGH = SetTCLK
-    SIO_BASE[SIO_GPIO_OUT_SET] = dio;
+    // TDI slot: data is already LOW
     sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
     sbw_irq_disable();
     SIO_BASE[SIO_GPIO_OUT_CLR] = clk;
     sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES);
+    SIO_BASE[SIO_GPIO_OUT_SET] = dio;   // Here data goes low->high, which sets MCLK high. 
+    sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES);    // Here we are ultra conservative since the docs arent really clear. 
     SIO_BASE[SIO_GPIO_OUT_SET] = clk;
     sbw_irq_enable();
 
     // TDO slot
-    SIO_BASE[SIO_GPIO_OE_CLR] = dio;
+    SIO_BASE[SIO_GPIO_OE_CLR] = dio;        // data pin to input
     sbw_wait_cycles(SBW_ACTIVE_SLOT_HIGH_CYCLES);
     sbw_irq_disable();
     SIO_BASE[SIO_GPIO_OUT_CLR] = clk;
     sbw_wait_cycles(SBW_ACTIVE_SLOT_LOW_CYCLES);
     SIO_BASE[SIO_GPIO_OUT_SET] = clk;
+    // There should probably be a wait here for the target to release the data pin, but in practice it seems to be fast enough that we can just set it back to output immediately.
     SIO_BASE[SIO_GPIO_OE_SET] = dio;
     sbw_irq_enable();
 }
