@@ -25,13 +25,11 @@ DATA_MASK = const(1 << SBW_PIN_DATA)
 POWER_MASK = const(1 << SBW_PIN_TARGET_POWER)
 
 HW_TUPLE_LAYOUT = (
-    "sio_base",
     "clock_mask",
     "data_mask",
 )
 
 DEFAULT_HW = (
-    SIO_BASE,
     CLOCK_MASK,
     DATA_MASK,
 )
