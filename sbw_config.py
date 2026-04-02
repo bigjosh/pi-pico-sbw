@@ -14,20 +14,13 @@ SBW_TARGET_POWER_SETTLE_MS = const(20)
 SIO_BASE = const(0xD000_0000)
 GPIO_OUT_ADDR = const(SIO_BASE + 0x10)
 GPIO_OUT_SET_ADDR = const(SIO_BASE + 0x18)
-GPIO_OUT_CLR_ADDR = const(SIO_BASE + 0x20)
 GPIO_OE_ADDR = const(SIO_BASE + 0x30)
 GPIO_OE_SET_ADDR = const(SIO_BASE + 0x38)
 GPIO_OE_CLR_ADDR = const(SIO_BASE + 0x40)
-GPIO_IN_ADDR = const(SIO_BASE + 0x04)
 
 CLOCK_MASK = const(1 << SBW_PIN_CLOCK)
 DATA_MASK = const(1 << SBW_PIN_DATA)
 POWER_MASK = const(1 << SBW_PIN_TARGET_POWER)
-
-HW_TUPLE_LAYOUT = (
-    "clock_mask",
-    "data_mask",
-)
 
 DEFAULT_HW = (
     CLOCK_MASK,

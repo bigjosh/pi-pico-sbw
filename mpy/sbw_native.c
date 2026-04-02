@@ -132,7 +132,6 @@ static void sbw_entry_rst_high(const uint32_t clk, const uint32_t dio) {
     SIO_BASE[SIO_GPIO_OUT_SET] = clk;
     sbw_wait_cycles(SBW_ENTRY_RST_HIGH_TEST_ENABLE_CYCLES);
 
-    SIO_BASE[SIO_GPIO_OUT_SET] = dio;
     sbw_wait_cycles(SBW_ENTRY_RST_HIGH_SETUP_CYCLES);
     sbw_pulse_low_cycles(clk, SBW_ENTRY_PULSE_LOW_CYCLES);
     sbw_wait_cycles(SBW_ENTRY_RST_HIGH_SETUP_CYCLES);
@@ -200,9 +199,9 @@ static __attribute__((always_inline)) inline bool sbw_io_bit(const uint32_t clk,
 }
 
 // ClrTCLK: HIGH -> LOW. TMSLDH timing per SLAU320AJ 2.2.3.2.3.
-// This is tricky - the dtaa must be high coming into TDI slot and then go low in the middle of the slot
-// the set TCLK low. It is the transition that does the setting. 
-// This always sets TMS low since we will always be in run-idle when we do this (that the only time you can change TCLK). 
+// The data line must be high coming into the TDI slot and then go low mid-slot
+// to set TCLK low — it is the transition that does the setting.
+// TMS is always low since we are always in Run-Test/Idle when changing TCLK.
 static inline void sbw_clr_tclk(const uint32_t clk, const uint32_t dio) {
     // TMS slot: TMSLDH — drive low for TMS=0, back high during CLK low
     SIO_BASE[SIO_GPIO_OUT_CLR] = dio;
@@ -237,7 +236,7 @@ static inline void sbw_clr_tclk(const uint32_t clk, const uint32_t dio) {
     sbw_irq_enable();
 }
 
-// SetTCLK: LOW -> HIGH. See above for details (this is inverse of ClrTCLK) but easier becuase data will already be low coming into TDI
+// SetTCLK: LOW -> HIGH. Inverse of ClrTCLK but simpler because data is already low coming into TDI.
 static inline void sbw_set_tclk(const uint32_t clk, const uint32_t dio) {
     // TMS slot: TMSLDH — drive low for TMS=0, back high during CLK low
     SIO_BASE[SIO_GPIO_OUT_CLR] = dio;
@@ -477,7 +476,6 @@ static bool sbw_set_pc_430xv2(const uint32_t clk, const uint32_t dio, uint32_t a
     sbw_shift_dr16_no_capture(clk, dio, 0x1400, false);
 
     sbw_shift_ir8_no_capture(clk, dio, SBW_IR_DATA_16BIT, false);
-    sbw_clr_tclk(clk, dio);
     sbw_set_tclk(clk, dio);
     sbw_shift_dr16_no_capture(clk, dio, (uint16_t)pc, true);
 
