@@ -641,7 +641,6 @@ static bool sbw_begin_read_block16_quick(const uint32_t clk, const uint32_t dio,
     sbw_shift_dr16_no_capture(clk, dio, 0x0501, true);
     sbw_shift_ir8_no_capture(clk, dio, SBW_IR_ADDR_CAPTURE, true);
     sbw_shift_ir8_no_capture(clk, dio, SBW_IR_DATA_QUICK, true);
-    sbw_set_tclk(clk, dio);
     return true;
 }
 
@@ -670,6 +669,36 @@ static bool sbw_read_block16_internal(const uint32_t clk, const uint32_t dio,
     return true;
 }
 
+/*
+ * Quick block write for 430Xv2 using IR_DATA_QUICK.
+ *
+ * TI does not define a quick write sequence for 430Xv2 (SLAU320AJ 2.3.3.3.2
+ * only covers 1xx/2xx/4xx). This implementation follows the DATA_QUICK bus
+ * cycle model derived from SLAU320AJ 2.3.3.3 and verified on FR4133:
+ *
+ *   "The MDB should be set when TCLK is low. On the next rising TCLK edge,
+ *    the value on the MDB is written into the location addressed by the PC."
+ *
+ *   "The PC is incremented by two with each falling edge of TCLK."
+ *
+ * Per-word write cycle:
+ *
+ *   DR_SHIFT16(data)   Load MDB via DATA_QUICK while TCLK=HIGH.
+ *   ClrTCLK            Falling edge — PC auto-increments by 2.
+ *   SetTCLK            Rising edge — commits MDB to memory[PC].
+ *
+ * The write commits on SetTCLK (rising edge) using the PC value AFTER the
+ * preceding ClrTCLK increment. This means the first real write targets
+ * PC_initial + 2. To compensate, SetPC targets address - 2, and the setup
+ * includes one ClrTCLK/SetTCLK cycle to advance PC from address-2 to address
+ * before the first word enters the loop.
+ *
+ * No dummy/priming data shift is needed — the setup ClrTCLK only increments
+ * PC without committing a write because no DR_SHIFT16 through DATA_QUICK has
+ * occurred yet. A previous version used a dummy DR_SHIFT16(0x1111) as a
+ * "priming" write, which was incorrect: it risked a spurious write to
+ * address-2, potentially violating memory protection regions.
+ */
 static bool sbw_begin_write_block16_quick(const uint32_t clk, const uint32_t dio, uint32_t address) {
     if (!sbw_set_pc_430xv2(clk, dio, (address - 2u) & 0x000FFFFFu)) {
         return false;
@@ -680,10 +709,9 @@ static bool sbw_begin_write_block16_quick(const uint32_t clk, const uint32_t dio
     sbw_shift_dr16_no_capture(clk, dio, 0x0500, true);
     sbw_shift_ir8_no_capture(clk, dio, SBW_IR_ADDR_CAPTURE, true);
     sbw_shift_ir8_no_capture(clk, dio, SBW_IR_DATA_QUICK, true);
-    sbw_set_tclk(clk, dio);
 
-    // FR4133 quick writes need one priming shift before the first real word.
-    sbw_shift_dr16_no_capture(clk, dio, 0x1111, true);
+    // ClrTCLK increments PC from address-2 to address. SetTCLK restores HIGH
+    // for the write loop (each word: DR at HIGH → ClrTCLK commits → SetTCLK).
     sbw_clr_tclk(clk, dio);
     sbw_set_tclk(clk, dio);
     return true;
@@ -698,7 +726,6 @@ static inline void sbw_write_block16_quick_word(const uint32_t clk, const uint32
 static bool sbw_finish_write_block16_quick(const uint32_t clk, const uint32_t dio) {
     sbw_shift_ir8_no_capture(clk, dio, SBW_IR_CNTRL_SIG_16BIT, true);
     sbw_shift_dr16_no_capture(clk, dio, 0x0501, true);
-    sbw_set_tclk(clk, dio);
     sbw_clr_tclk(clk, dio);
     sbw_set_tclk(clk, dio);
     return sbw_in_full_emulation(clk, dio, NULL);
