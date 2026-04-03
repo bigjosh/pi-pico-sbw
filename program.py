@@ -1,10 +1,7 @@
 import sys
 import time
 
-try:
-    import uselect as select
-except ImportError:
-    import select
+import select
 
 from sbw import SBWNative
 import sbw_native
@@ -191,47 +188,33 @@ def program_once(sbw, firmware_blocks, now=None):
     return device_uuid
 
 
-class _SerialConsole:
-    def __init__(self):
-        self._poll = select.poll()
-        self._poll.register(sys.stdin, select.POLLIN)
+_stdin_poll = select.poll()
+_stdin_poll.register(sys.stdin, select.POLLIN)
 
-    def key_available(self):
-        return bool(self._poll.poll(0))
 
-    def getch(self):
-        if not self.key_available():
-            return None
-        value = sys.stdin.read(1)
-        if isinstance(value, bytes):
-            value = value.decode("utf-8", "ignore")
-        return value or None
+def _drain_stdin():
+    while _stdin_poll.poll(0):
+        sys.stdin.read(1)
 
-    def drain(self):
-        while self.key_available():
-            value = self.getch()
-            if value is None:
-                break
+
+def _wait_key():
+    while not _stdin_poll.poll(0):
+        time.sleep_ms(10)
+    return sys.stdin.read(1)
 
 
 def program_loop():
     print("Logging disabled.")
     firmware_blocks = load_firmware_blocks()
     sbw = SBWNative()
-    console = _SerialConsole()
 
     while True:
-        console.drain()
+        _drain_stdin()
         print("\rPress [spacebar] to start programming cycle, any other key to exit...")
 
-        key = None
-        while key is None:
-            key = console.getch()
-            if key is None:
-                time.sleep_ms(10)
-
+        key = _wait_key()
         if key != " ":
-            print("Exited by user, key = %s" % key)
+            print("Exited by user.")
             return
 
         print("Programming cycle started.")
