@@ -13,6 +13,7 @@ import machine
 
 from sbw import SBW
 from target_power import TargetPowerWithDetect
+from utils import load_firmware_blocks
 import sbw_native
 
 # Pico Pin | GPIO | Target Pin
@@ -27,50 +28,6 @@ SBW_PIN_POWER = 28
 POWER_SETTLE_MS = 20
 
 FIRMWARE_FILE_NAME = "program.txt"
-
-
-def parse_titxt_blocks(titxt_data):
-    blocks = []
-    current_start = None
-    current_data = bytearray()
-
-    for raw_line in titxt_data.decode("ascii").splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        if line[0] in {"q", "Q"}:
-            break
-        if line.startswith("@"):
-            if current_start is not None and current_data:
-                blocks.append((current_start, bytes(current_data)))
-                current_data = bytearray()
-            current_start = int(line[1:], 16)
-            continue
-
-        if current_start is None:
-            raise ValueError("TI-TXT data line appeared before an address header")
-
-        current_data.extend(bytes.fromhex(line))
-
-    if current_start is not None and current_data:
-        blocks.append((current_start, bytes(current_data)))
-
-    return blocks
-
-
-def load_firmware_blocks(path=FIRMWARE_FILE_NAME):
-    print("Loading %s into memory..." % path)
-    with open(path, "rb") as handle:
-        titxt_data = handle.read()
-
-    blocks = parse_titxt_blocks(titxt_data)
-    total_bytes = sum(len(data) for _, data in blocks)
-
-    print(
-        "Firmware is %d block(s), %d bytes.\n"
-        % (len(blocks), total_bytes)
-    )
-    return blocks
 
 
 def program_once(power, sbw, firmware_blocks):
@@ -117,7 +74,7 @@ def program_once(power, sbw, firmware_blocks):
 
 
 def program_loop():
-    firmware_blocks = load_firmware_blocks()
+    firmware_blocks = load_firmware_blocks(FIRMWARE_FILE_NAME)
     power = TargetPowerWithDetect(SBW_PIN_POWER, SBW_PIN_CLOCK, POWER_SETTLE_MS)
     sbw = SBW(SBW_PIN_CLOCK, SBW_PIN_DATA)
     led = machine.Pin("LED", machine.Pin.OUT, value=0)
