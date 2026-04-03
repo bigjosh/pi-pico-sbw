@@ -90,6 +90,12 @@ examples use the Vcc pin to power cycle the target, but this is not necessary.
 - direct MMIO to `RP2350` `SIO` registers
 - `~90 KiB/s` write, `~88 KiB/s` read throughput
 
+## How so much faster than TI Tools?
+
+1. Used the quick versions of read and write block. These are only semi-documented and not used by the TI code. These save having to reload the address for every word transferred.
+2. Run closer to the max 10Mhz clock speed. We get about 50% of the way there using carefully crafted SIO bitbanging. We could get to 100% with PIO but this was fast enough for me.
+3. Got rid of all the crufty overhead of the TI tools doing all sorts of stuff over the USB link and doing extra resets of the target etc. We only do what is strictly necessary to reliably program and verify, and we do it the most direct way possible.
+
 ## Repo Layout
 
 - [program_auto.py](program_auto.py) — auto-detecting programmer (see above)
