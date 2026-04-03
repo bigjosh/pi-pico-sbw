@@ -4,13 +4,8 @@ import time
 import select
 
 from sbw import SBW
-from target_power import TargetPower
 import sbw_native
 
-SBW_PIN_CLOCK = 2
-SBW_PIN_DATA = 3
-SBW_PIN_POWER = 4
-POWER_SETTLE_MS = 20
 
 FIRMWARE_FILE_NAME = "tsl-calibre-msp.txt"
 DEVICE_DESCRIPTOR_ADDRESS = 0x1A00
@@ -117,19 +112,18 @@ def load_firmware_blocks(path=FIRMWARE_FILE_NAME):
     return blocks
 
 
-def program_once(power, sbw, firmware_blocks):
+def program_once(sbw, firmware_blocks, now=None):
     t0 = time.ticks_ms()
 
     def tp(msg):
         dt = time.ticks_diff(time.ticks_ms(), t0)
         print("%02d.%03d %s" % (dt // 1000, dt % 1000, msg))
 
-    now = time.gmtime()
+    if now is None:
+        now = time.gmtime()
 
-    tp("Powering on target...")
-    power.on()
+    sbw.power_on()
     try:
-        tp("Reading JTAG ID...")
         ok, jtag_id = sbw.read_id()
         if not ok or jtag_id != sbw_native.JTAG_ID_EXPECTED:
             raise RuntimeError("expected JTAG ID 0x%02X, found 0x%02X" % (sbw_native.JTAG_ID_EXPECTED, jtag_id))
@@ -169,20 +163,20 @@ def program_once(power, sbw, firmware_blocks):
 
         tp("All blocks verified.")
     except Exception:
-        power.off()
+        sbw.power_off()
         raise
 
     # Power-cycle target to run briefly
     tp("Starting target execution...")
-    power.off()
+    sbw.power_off()
     time.sleep_ms(REBOOT_OFF_MS)
-    power.on()
+    sbw.power_on()
     try:
         tp("Waiting %g seconds before disconnect..." % (POST_PROGRAM_RUN_MS / 1000.0))
         time.sleep_ms(POST_PROGRAM_RUN_MS)
         tp("Disconnect the programming connector to remove power from the TSL.")
     finally:
-        power.off()
+        sbw.power_off()
 
     tp("Done.")
     return device_uuid
@@ -206,8 +200,7 @@ def _wait_key():
 def program_loop():
     print("Logging disabled.")
     firmware_blocks = load_firmware_blocks()
-    power = TargetPower(SBW_PIN_POWER, POWER_SETTLE_MS)
-    sbw = SBW(SBW_PIN_CLOCK, SBW_PIN_DATA)
+    sbw = SBW()
 
     while True:
         _drain_stdin()
@@ -219,7 +212,7 @@ def program_loop():
             return
 
         try:
-            program_once(power, sbw, firmware_blocks)
+            program_once(sbw, firmware_blocks)
         except Exception as exc:
             print("Programming failed: %s\n" % exc)
 

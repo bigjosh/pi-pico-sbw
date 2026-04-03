@@ -1,4 +1,4 @@
-from sbw import SBWNative, format_bypass, format_status, format_sync
+from sbw import SBW, format_bypass, format_status, format_sync
 from sbw_config import bytes_to_words_le
 from testsuite import bench_block_roundtrip
 
@@ -42,7 +42,7 @@ def _require_power(sbw):
 
 
 def repl():
-    sbw = SBWNative()
+    sbw = SBW()
     print("")
     print("pi-pico-sbw micropython shell")
     _print_pins(sbw)

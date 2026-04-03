@@ -1,57 +1,23 @@
-import time
-
 import machine
 
 import sbw_native
-from sbw_config import (
-    SBW_PIN_CLOCK,
-    SBW_PIN_DATA,
-    SBW_PIN_TARGET_POWER,
-    SBW_TARGET_POWER_SETTLE_MS,
-    ensure_system_clock,
-)
 
 
-class SBWNative:
-    def __init__(self, clock_pin=SBW_PIN_CLOCK, data_pin=SBW_PIN_DATA, power_pin=SBW_PIN_TARGET_POWER):
-        ensure_system_clock()
-        self._clock_pin = clock_pin
-        self._data_pin = data_pin
-        self._power_pin = power_pin
+class SBW:
+    def __init__(self, clock_pin, data_pin):
+        freq = machine.freq()
+        if isinstance(freq, tuple):
+            freq = freq[0]
+        if freq > sbw_native.SYS_CLK_HZ:
+            raise RuntimeError("clk_sys %d Hz exceeds sbw_native limit %d Hz" % (freq, sbw_native.SYS_CLK_HZ))
         self._clk = 1 << clock_pin
         self._dio = 1 << data_pin
         self._clock = machine.Pin(clock_pin, machine.Pin.OUT, value=0)
         self._data = machine.Pin(data_pin, machine.Pin.IN)
-        self._power = machine.Pin(power_pin, machine.Pin.IN)
-        self._power_enabled = False
-        self.release()
-
-    def pins(self):
-        return (
-            ("SBWTCK", self._clock_pin),
-            ("SBWTDIO", self._data_pin),
-            ("VCC", self._power_pin),
-        )
 
     def release(self):
         self._data.init(machine.Pin.IN)
         self._clock.init(machine.Pin.OUT, value=0)
-
-    def power_on(self):
-        self.release()
-        self._power.init(machine.Pin.OUT, value=1)
-        self._power_enabled = True
-        time.sleep_ms(SBW_TARGET_POWER_SETTLE_MS)
-
-    def power_off(self):
-        self.release()
-        self._power.init(machine.Pin.IN)
-        self._power_enabled = False
-
-    def status(self):
-        return {
-            "power": self._power_enabled,
-        }
 
     def read_id(self):
         return sbw_native.read_id(self._clk, self._dio)
@@ -131,21 +97,3 @@ class SBWNative:
             return False, original, test_readback, restored_readback
 
         return True, original, test_readback, restored_readback
-
-
-def format_status(status):
-    return "power=%s" % ("on" if status["power"] else "off",)
-
-
-def format_bypass(ok, captured):
-    return "bypass captured=0x%04X expected=0x%04X %s" % (
-        captured,
-        sbw_native.BYPASS_EXPECTED,
-        "(ok)" if ok else "(unexpected)",
-    )
-
-
-def format_sync(ok, control_capture):
-    mask = sbw_native.FULL_EMULATION_MASK
-    state = "(full-emulation)" if ok and (control_capture & mask) == mask else "(unexpected)"
-    return "cntrl-sig=0x%04X %s" % (control_capture, state)

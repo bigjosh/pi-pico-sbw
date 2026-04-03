@@ -1,7 +1,8 @@
 import time
 
 import sbw_native
-from sbw import SBWNative
+from sbw import SBW
+from target_power import TargetPower
 from sbw_config import (
     REGRESSION_DESCRIPTOR_ADDR_0,
     REGRESSION_DESCRIPTOR_ADDR_1,
@@ -15,6 +16,11 @@ from sbw_config import (
     REGRESSION_RAM_VALUE_1,
     bytes_to_words_le,
 )
+
+SBW_PIN_CLOCK = 2
+SBW_PIN_DATA = 3
+SBW_PIN_POWER = 4
+POWER_SETTLE_MS = 20
 
 
 def _pattern_word(index):
@@ -82,8 +88,9 @@ def _exercise_byte_io(sbw, address, payload):
 
 
 def run_regression():
-    sbw = SBWNative()
-    sbw.power_on()
+    power = TargetPower(SBW_PIN_POWER, POWER_SETTLE_MS)
+    sbw = SBW(SBW_PIN_CLOCK, SBW_PIN_DATA)
+    power.on()
     try:
         ok, jtag_id = sbw.read_id()
         assert ok and jtag_id == sbw_native.JTAG_ID_EXPECTED
@@ -121,13 +128,14 @@ def run_regression():
 
         return True
     finally:
-        sbw.power_off()
+        power.off()
 
 
 def run_bench(words=5120, address=REGRESSION_FRAM_ADDR):
-    sbw = SBWNative()
-    sbw.power_on()
+    power = TargetPower(SBW_PIN_POWER, POWER_SETTLE_MS)
+    sbw = SBW(SBW_PIN_CLOCK, SBW_PIN_DATA)
+    power.on()
     try:
         return bench_block_roundtrip(sbw, address, words)
     finally:
-        sbw.power_off()
+        power.off()
