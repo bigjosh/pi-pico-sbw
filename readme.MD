@@ -1,71 +1,78 @@
 # Pi Pico SBW Programmer
 
-This repo contains a standalone `MSP430FR4133` `SBW` programmer built around a `Raspberry Pi Pico 2 W` running MicroPython.
+A standalone MSP430 programmer using `Spy-Bi-Wire` (`SBW`), built on a `Raspberry Pi Pico/2/W` running MicroPython.
 
-The active architecture is:
+Up to 100x faster than TI programmers like MSP-FET. 
+Can run stand-alone on a $4 Pi Pico.
+Python harness easily extensible. Examples showing target-autodetect & logging to a google spreadsheet. 
 
-- MicroPython for fixture orchestration
-- a native `.mpy` module in C for all timing-critical `SBW` and `JTAG` work
-- direct MMIO writes to `RP2350` `SIO` registers (base address hardcoded in C)
-- no `PIO`
+## Quick Start
 
-The project is intentionally narrow. It is specialized for the exact target and programming flow we have been validating on the bench.
+1. Install [MicroPython](https://micropython.org/download/RPI_PICO2W/) on your Pico
+2. Wire the four target pins (see [Hardware](#hardware) below)
+3. Copy these files to the Pico using [mpremote](https://docs.micropython.org/en/latest/reference/mpremote.html), Thonny, or any file copy tool:
+   `mpy/sbw_native.mpy`, `sbw.py`, `target_power.py`, `program.py`, `main.py`
+4. Rename your TI-TXT firmware file to `program.txt` and copy to the Pico
+5. Connect a target and open a serial terminal to the Pico (or just power it on)
+6. `main.py` runs automatically on boot, starting the manual programming loop
+7. Press **spacebar** to program, any other key to exit to the REPL
 
-## Current State
+You should see something like this...
 
-The live, bench-validated path is the MicroPython app at the repo root, backed by the native-module build area in [mpy/](mpy/).
+```
+Loading program.txt into memory...
+Firmware is 4 block(s), 10426 bytes.
 
-The repo also contains the production-oriented TSL programmer app:
+Press [spacebar] to start programming cycle, any other key to exit...
+00.000 Powering on target...
+00.020 Reading JTAG ID...
+00.066 Writing firmware block 1/4 addr=0x0C400 len=414...
+00.115 Writing firmware block 2/4 addr=0x0C5A0 len=9974...
+00.227 Writing firmware block 3/4 addr=0x0FF80 len=8...
+00.273 Writing firmware block 4/4 addr=0x0FFE2 len=30...
+00.320 Verifying firmware blocks...
+00.320 Verifying firmware block 1/4 addr=0x0C400 len=414...
+00.369 Verifying firmware block 2/4 addr=0x0C5A0 len=9974...
+00.483 Verifying firmware block 3/4 addr=0x0FF80 len=8...
+00.529 Verifying firmware block 4/4 addr=0x0FFE2 len=30...
+00.575 All blocks verified.
+00.575 Power off...
+00.575 Done.
+Press [spacebar] to start programming cycle, any other key to exit...
+```
 
-- local TI-TXT firmware asset: [tsl-calibre-msp.txt](tsl-calibre-msp.txt)
-- programming workflow: [program.py](program.py)
-- boot entrypoint: [main.py](main.py)
-- retained bench shell: [debug_shell.py](debug_shell.py)
+## Auto-program
 
-Latest verified hardware results on the wired target:
 
-- `read-jtagid` -> `0x98`
-- `bypass-test` -> `0x52AD`
-- `sync-por` -> `0xC301`
-- `read-mem16 0x2000` -> `0x1234` after regression RAM write
-- `read-mem16 0x2002` -> `0xA55A` after regression RAM write
-- `read-block16 0x1a00 11` -> descriptor span with `0x0606` at `0x1A00` and `0x0811` at `0x1A14`
-- RAM write/readback passes at `0x2000` and `0x2002`
-- Python memory smoke write/read/restore passes at `0xC400`
-- Python round-trip block benchmark for `10,240` bytes:
-  - `~112 ms` per write pass
-  - `~114 ms` per read pass
-  - `~90 KiB/s` write throughput
-  - `~88 KiB/s` read throughput
+```python
+from program_auto import program_loop
+program_loop()
+```
 
-## Repo Layout
 
-- [mpy/sbw_native.c](mpy/sbw_native.c)
-  Native MicroPython module. Owns the `SBW` transport, `JTAG` sequencing, and general target memory read/write primitives. SIO base address is hardcoded; GPIO pin masks are passed from Python.
-- [mpy/SBW_NATIVE_API.md](mpy/SBW_NATIVE_API.md)
-  Reference for the public native-module API exposed to Python.
-- [sbw_config.py](sbw_config.py)
-  Hardware constants, pin assignments, regression constants, and the `150 MHz` clock setup/verification logic.
-- [sbw.py](sbw.py)
-  Thin Python wrapper around the native module plus target power control and byte-level read/write helpers.
-- [program.py](program.py)
-  Production TSL programming app. Loads the TI-TXT image, writes the timestamp and firmware blocks separately, verifies each block by readback, and power-cycles the target to run it briefly.
-- [main.py](main.py)
-  Boot entrypoint for the production programmer loop.
-- [debug_shell.py](debug_shell.py)
-  Interactive bench shell preserved from the earlier development workflow.
-- [testsuite.py](testsuite.py)
-  Regression and Python-side benchmark entry points.
-- [mpy/README.md](mpy/README.md)
-  Native-module build and deployment notes.
-- [tools/build-mpy-native.ps1](tools/build-mpy-native.ps1)
-  Windows helper to build the native `.mpy`.
-- [status.md](status.md)
-  Current project status and file-by-file handoff.
+### Auto mode: `program_auto.py`
+
+
+Fully automatic. Connect a target and it programs immediately — no keypress
+needed. The onboard LED lights during programming. After completion, it waits
+for the target to be removed before accepting the next one. So sweet. 
+
+To use the auto-detect mode instead, copy `program_auto.py` and update `main.py`:
+
+```python
+import program_auto
+program_auto.program_loop()
+```
+
+### Firmware image
+
+Both modes program the TI-TXT file `program.txt` from the Pico's filesystem.
+Copy your firmware image to the Pico as `program.txt` before running.
+This file format is standard for MSP430 programming. Other formats (like Intel HEX) could be easily supported too. 
 
 ## Hardware
 
-Pin connections (consecutive physical pins on the Pico 2 W):
+Pin connections (four consecutive physical pins on the Pico 2 W):
 
 | Pico Pin | GPIO | Target Pin |
 |----------|------|------------|
@@ -74,77 +81,48 @@ Pin connections (consecutive physical pins on the Pico 2 W):
 | 33 | GND | GND |
 | 34 | GP28 | VCC |
 
-GP26 (SBWTCK) doubles as an ADC input for target detection: with the Pico's
-internal pull-up enabled, a connected MSP430's SBWTCK pull-down drops the
-voltage below the detection threshold, signaling that a target is present.
+Note that the Vcc connection is optional if your target needs external power. The programming code
+examples use the Vcc pin to power cycle the target, but this is not necessary.
 
-Important constraints:
+# Implementation details
+- MicroPython for orchestration
+- native `.mpy` module in C for timing-critical `SBW`/`JTAG` bit-banging
+- direct MMIO to `RP2350` `SIO` registers
+- `~90 KiB/s` write, `~88 KiB/s` read throughput
 
-- `GP28` target power is a bring-up convenience, not a production-grade supply rail
-- `SBWTDIO` currently has no series resistor, so the native transport only releases it for the TDO slot itself and for explicit session boundary handling
+## Repo Layout
 
-## Clock Requirement
-
-The native module is compiled against a fixed maximum system clock of `150 MHz`.
-
-The important rule is:
-
-- actual `clk_sys` must be `<= sbw_native.SYS_CLK_HZ`
-
-If the MCU is clocked faster than the compile-time assumption, the native busy-wait loops become too short in real time and `SBW` pulse widths may violate protocol minimums. A slower clock is safe for protocol timing, but will reduce throughput.
-
-The caller is responsible for enforcing that precondition before using the native API. The current `SBWNative()` wrapper does this conservatively by attempting to set the clock to `150 MHz` and verifying the result.
-
-Example for low-level callers:
-
-```python
-import machine
-import sbw_native
-
-target_hz = sbw_native.SYS_CLK_HZ
-machine.freq(target_hz)
-
-actual = machine.freq()
-if isinstance(actual, tuple):
-    actual = actual[0]
-actual = int(actual)
-
-if actual > target_hz:
-    raise RuntimeError("clk_sys too fast for sbw_native: %d > %d" % (actual, target_hz))
-```
+- [program_auto.py](program_auto.py) — auto-detecting programmer (see above)
+- [program.py](program.py) — manual keypress-triggered programmer (see above)
+- [sbw.py](sbw.py) — Python wrapper around the native SBW module
+- [target_power.py](target_power.py) — target power control and connection detection
+- [sbw_native.mpy](mpy/sbw_native.mpy) — compiled native module
+- [mpy/sbw_native.c](mpy/sbw_native.c) — native module source (SBW transport, JTAG sequencing, memory access)
+- [mpy/SBW_NATIVE_API.md](mpy/SBW_NATIVE_API.md) — native module API reference
+- [testsuite.py](testsuite.py) — regression tests and benchmark
+- [sbw_config.py](sbw_config.py) — regression test constants
+- [power_detect_test.py](power_detect_test.py) — interactive target detect/disconnect test loop
+- [mpy/README.md](mpy/README.md) — native module build notes
+- [tools/build-mpy-native.ps1](tools/build-mpy-native.ps1) — Windows build helper
 
 ## Build And Deploy
 
-Build the native module on Windows with:
+Build the native module on Windows:
 
 ```powershell
 python -m pip install --user pyelftools
 .\tools\build-mpy-native.ps1
 ```
 
-Then copy these files to the Pico running MicroPython:
+## Clock Requirement
 
-- `mpy/sbw_native.mpy`
-- `sbw_config.py`
-- `sbw.py`
-- `program.py`
-- `main.py`
-- `debug_shell.py`
-- `testsuite.py`
-- `tsl-calibre-msp.txt`
-
-On boot, `main.py` starts the production TSL programmer loop automatically.
-
-For the retained debug shell:
-
-```python
-import debug_shell
-debug_shell.repl()
-```
+The native module is compiled for a maximum system clock of `150 MHz`. The
+`SBW` class checks `machine.freq()` on init and raises if it exceeds
+`sbw_native.SYS_CLK_HZ`. Running slower is safe but reduces throughput.
 
 ## Primary References
 
-The implementation was built from TI primary documentation in [docs/](docs/):
+Built from TI primary documentation in [docs/](docs/):
 
 - `Programming over JTAG` (`SLAU320`)
 - `MSP430FR4xx and MSP430FR2xx Family User's Guide` (`SLAU445`)
