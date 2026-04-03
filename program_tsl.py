@@ -4,8 +4,19 @@ import time
 import select
 
 from sbw import SBW
+from target_power import TargetPower
 import sbw_native
 
+# Pico Pin | GPIO | Target Pin
+# ---------|------|----------
+#       31 | GP26 | SBWTCK
+#       32 | GP27 | SBWTDIO
+#       33 | GND  | GND
+#       34 | GP28 | VCC
+SBW_PIN_CLOCK = 26
+SBW_PIN_DATA = 27
+SBW_PIN_POWER = 28
+POWER_SETTLE_MS = 20
 
 FIRMWARE_FILE_NAME = "tsl-calibre-msp.txt"
 DEVICE_DESCRIPTOR_ADDRESS = 0x1A00
@@ -112,18 +123,19 @@ def load_firmware_blocks(path=FIRMWARE_FILE_NAME):
     return blocks
 
 
-def program_once(sbw, firmware_blocks, now=None):
+def program_once(power, sbw, firmware_blocks):
     t0 = time.ticks_ms()
 
     def tp(msg):
         dt = time.ticks_diff(time.ticks_ms(), t0)
         print("%02d.%03d %s" % (dt // 1000, dt % 1000, msg))
 
-    if now is None:
-        now = time.gmtime()
+    now = time.gmtime()
 
-    sbw.power_on()
+    tp("Powering on target...")
+    power.on()
     try:
+        tp("Reading JTAG ID...")
         ok, jtag_id = sbw.read_id()
         if not ok or jtag_id != sbw_native.JTAG_ID_EXPECTED:
             raise RuntimeError("expected JTAG ID 0x%02X, found 0x%02X" % (sbw_native.JTAG_ID_EXPECTED, jtag_id))
@@ -163,20 +175,20 @@ def program_once(sbw, firmware_blocks, now=None):
 
         tp("All blocks verified.")
     except Exception:
-        sbw.power_off()
+        power.off()
         raise
 
     # Power-cycle target to run briefly
     tp("Starting target execution...")
-    sbw.power_off()
+    power.off()
     time.sleep_ms(REBOOT_OFF_MS)
-    sbw.power_on()
+    power.on()
     try:
         tp("Waiting %g seconds before disconnect..." % (POST_PROGRAM_RUN_MS / 1000.0))
         time.sleep_ms(POST_PROGRAM_RUN_MS)
         tp("Disconnect the programming connector to remove power from the TSL.")
     finally:
-        sbw.power_off()
+        power.off()
 
     tp("Done.")
     return device_uuid
@@ -200,7 +212,8 @@ def _wait_key():
 def program_loop():
     print("Logging disabled.")
     firmware_blocks = load_firmware_blocks()
-    sbw = SBW()
+    power = TargetPower(SBW_PIN_POWER, POWER_SETTLE_MS)
+    sbw = SBW(SBW_PIN_CLOCK, SBW_PIN_DATA)
 
     while True:
         _drain_stdin()
@@ -212,7 +225,7 @@ def program_loop():
             return
 
         try:
-            program_once(sbw, firmware_blocks)
+            program_once(power, sbw, firmware_blocks)
         except Exception as exc:
             print("Programming failed: %s\n" % exc)
 

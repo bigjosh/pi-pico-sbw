@@ -65,16 +65,22 @@ Latest verified hardware results on the wired target:
 
 ## Hardware
 
-Bench wiring used for the validated path:
+Pin connections (consecutive physical pins on the Pico 2 W):
 
-- `GP2` -> target `TEST / SBWTCK`
-- `GP3` -> target `/RST/NMI / SBWTDIO`
-- `GP4` -> target `VCC` for lab bring-up power switching
-- Pico `GND` -> target `GND`
+| Pico Pin | GPIO | Target Pin |
+|----------|------|------------|
+| 31 | GP26 | SBWTCK |
+| 32 | GP27 | SBWTDIO |
+| 33 | GND | GND |
+| 34 | GP28 | VCC |
+
+GP26 (SBWTCK) doubles as an ADC input for target detection: with the Pico's
+internal pull-up enabled, a connected MSP430's SBWTCK pull-down drops the
+voltage below the detection threshold, signaling that a target is present.
 
 Important constraints:
 
-- `GP4` target power is a bring-up convenience, not a production-grade supply rail
+- `GP28` target power is a bring-up convenience, not a production-grade supply rail
 - `SBWTDIO` currently has no series resistor, so the native transport only releases it for the TDO slot itself and for explicit session boundary handling
 
 ## Clock Requirement

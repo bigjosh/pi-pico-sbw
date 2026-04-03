@@ -14,11 +14,11 @@ Validated environment:
 - Board: `RPI_PICO2_W`
 - Firmware: official MicroPython `v1.27.0`
 - Target: `MSP430FR4133`
-- Wiring:
-  - `GP2` -> `TEST / SBWTCK`
-  - `GP3` -> `/RST/NMI / SBWTDIO`
-  - `GP4` -> target `VCC`
-  - shared `GND`
+- Wiring (consecutive physical pins):
+  - Pin 31 / `GP26` -> `TEST / SBWTCK`
+  - Pin 32 / `GP27` -> `/RST/NMI / SBWTDIO`
+  - Pin 33 / `GND`  -> target `GND`
+  - Pin 34 / `GP28` -> target `VCC`
 
 Important runtime requirement:
 

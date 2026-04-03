@@ -1,16 +1,18 @@
-"""Simple and fast interactive MSP430 SBW programmer.
+"""Fast automatic MSP430 SBW programmer.
+Autodetects when a target is connected, programs it automatically, and then waits for
+the target to be removed before starting the next cycle. 
+
+Connect to target, wait for LED to go off to know whenb programming is done.
+
 Programs the file `program.txt` into target. 
-Connect to the Pico over USB serial and open a terminal to it. 
-Waits for a keypress to start each cycle.
 Pin connections below.
 """
-import sys
 import time
 
-import select
+import machine
 
 from sbw import SBW
-from target_power import TargetPower
+from target_power import TargetPowerWithDetect
 import sbw_native
 
 # Pico Pin | GPIO | Target Pin
@@ -25,6 +27,7 @@ SBW_PIN_POWER = 28
 POWER_SETTLE_MS = 20
 
 FIRMWARE_FILE_NAME = "program.txt"
+
 
 def parse_titxt_blocks(titxt_data):
     blocks = []
@@ -74,7 +77,7 @@ def program_once(power, sbw, firmware_blocks):
     t0 = time.ticks_ms()
 
     def tp(msg):
-        """Print with ##.### seconmds timestamp"""
+        """Print with ##.### seconds timestamp"""
         dt = time.ticks_diff(time.ticks_ms(), t0)
         print("%02d.%03d %s" % (dt // 1000, dt % 1000, msg))
 
@@ -113,39 +116,28 @@ def program_once(power, sbw, firmware_blocks):
     tp("Done.")
 
 
-_stdin_poll = select.poll()
-_stdin_poll.register(sys.stdin, select.POLLIN)
-
-
-def _drain_stdin():
-    while _stdin_poll.poll(0):
-        sys.stdin.read(1)
-
-
-def _wait_key():
-    while not _stdin_poll.poll(0):
-        time.sleep_ms(10)
-    return sys.stdin.read(1)
-
-
 def program_loop():
     firmware_blocks = load_firmware_blocks()
-    power = TargetPower(SBW_PIN_POWER, POWER_SETTLE_MS)
+    power = TargetPowerWithDetect(SBW_PIN_POWER, SBW_PIN_CLOCK, POWER_SETTLE_MS)
     sbw = SBW(SBW_PIN_CLOCK, SBW_PIN_DATA)
+    led = machine.Pin("LED", machine.Pin.OUT, value=0)
 
     while True:
-        _drain_stdin()
-        print("\rPress [spacebar] to start programming cycle, any other key to exit...")
+        print("Waiting for target...")
+        power.wait_for_connect()
+        print("Target detected.")
 
-        key = _wait_key()
-        if key != " ":
-            print("Exited by user.")
-            return
-
+        led.on()
         try:
             program_once(power, sbw, firmware_blocks)
         except Exception as exc:
             print("Programming failed: %s\n" % exc)
+        finally:
+            led.off()
+
+        print("Waiting for target to be removed...")
+        power.wait_for_disconnect()
+        print("Target removed.\n")
 
 
 if __name__ == "__main__":
