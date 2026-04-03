@@ -1,10 +1,21 @@
-import sys
+"""TSL factory programmer with auto-detect and Google Sheets logging.
+
+Autodetects target connection, programs firmware + commissioning timestamp,
+verifies, power-cycles the target to run briefly, then logs the result to
+a Google Sheet. Waits for target removal before the next cycle.
+
+Requires secrets.py with WIFI_SSID, WIFI_PASSWORD, and SHEETS_URL.
+Pin connections below.
+"""
 import time
 
-import select
+import machine
 
 from sbw import SBW
-from target_power import TargetPower
+from target_power import TargetPowerWithDetect
+from utils import load_firmware_blocks, get_device_uuid
+from addrow import add_row
+import wifi
 import sbw_native
 
 # Pico Pin | GPIO | Target Pin
@@ -24,54 +35,6 @@ DEVICE_DESCRIPTOR_LENGTH = 0x12
 TIMESTAMP_ADDRESS = 0x1800
 POST_PROGRAM_RUN_MS = 1000
 REBOOT_OFF_MS = 50
-
-
-def parse_titxt_blocks(titxt_data):
-    blocks = []
-    current_start = None
-    current_data = bytearray()
-
-    for raw_line in titxt_data.decode("ascii").splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        if line[0] in {"q", "Q"}:
-            break
-        if line.startswith("@"):
-            if current_start is not None and current_data:
-                blocks.append((current_start, bytes(current_data)))
-                current_data = bytearray()
-            current_start = int(line[1:], 16)
-            continue
-
-        if current_start is None:
-            raise ValueError("TI-TXT data line appeared before an address header")
-
-        current_data.extend(bytes.fromhex(line))
-
-    if current_start is not None and current_data:
-        blocks.append((current_start, bytes(current_data)))
-
-    return blocks
-
-
-def merge_contiguous_blocks(blocks):
-    merged = []
-
-    for address, data in blocks:
-        if not merged:
-            merged.append((address, bytes(data)))
-            continue
-
-        prev_address, prev_data = merged[-1]
-        prev_end = prev_address + len(prev_data)
-
-        if address == prev_end:
-            merged[-1] = (prev_address, prev_data + data)
-        else:
-            merged.append((address, bytes(data)))
-
-    return merged
 
 
 def build_timestamp_bytes(now):
@@ -99,34 +62,12 @@ def build_timestamp_bytes(now):
     )
 
 
-def get_device_uuid(dd_bytes):
-    device_info = dd_bytes[0x04:0x08]
-    lot_wafer = dd_bytes[0x0A:0x0E]
-    die_x_pos = dd_bytes[0x0E:0x10]
-    die_y_pos = dd_bytes[0x10:0x12]
-    return "".join("%02X" % value for value in device_info + lot_wafer + die_x_pos + die_y_pos)
-
-
-def load_firmware_blocks(path=FIRMWARE_FILE_NAME):
-    print("Loading %s into memory..." % path)
-    with open(path, "rb") as handle:
-        titxt_data = handle.read()
-
-    raw_blocks = parse_titxt_blocks(titxt_data)
-    blocks = merge_contiguous_blocks(raw_blocks)
-    total_bytes = sum(len(data) for _, data in blocks)
-
-    print(
-        "Firmware is %d block(s), merged to %d write block(s), %d bytes.\n"
-        % (len(raw_blocks), len(blocks), total_bytes)
-    )
-    return blocks
-
-
 def program_once(power, sbw, firmware_blocks):
+    """Program and verify one target. Returns device UUID on success."""
     t0 = time.ticks_ms()
 
     def tp(msg):
+        """Print with ##.### seconds timestamp."""
         dt = time.ticks_diff(time.ticks_ms(), t0)
         print("%02d.%03d %s" % (dt // 1000, dt % 1000, msg))
 
@@ -148,7 +89,7 @@ def program_once(power, sbw, firmware_blocks):
         device_uuid = get_device_uuid(dd_bytes)
         tp("Device UUID is %s" % device_uuid)
 
-        # Write all blocks
+        # Write timestamp + firmware
         timestamp_data = build_timestamp_bytes(now)
         tp("Writing commissioning timestamp...")
         if not sbw.write_bytes(TIMESTAMP_ADDRESS, timestamp_data):
@@ -160,7 +101,7 @@ def program_once(power, sbw, firmware_blocks):
             if not sbw.write_bytes(address, data):
                 raise RuntimeError("write failed at 0x%05X" % (address & 0xFFFFF))
 
-        # Verify all blocks
+        # Verify all
         tp("Verifying commissioning timestamp...")
         ok, _ = sbw.verify_bytes(TIMESTAMP_ADDRESS, timestamp_data)
         if not ok:
@@ -184,9 +125,8 @@ def program_once(power, sbw, firmware_blocks):
     time.sleep_ms(REBOOT_OFF_MS)
     power.on()
     try:
-        tp("Waiting %g seconds before disconnect..." % (POST_PROGRAM_RUN_MS / 1000.0))
+        tp("Waiting %g seconds..." % (POST_PROGRAM_RUN_MS / 1000.0))
         time.sleep_ms(POST_PROGRAM_RUN_MS)
-        tp("Disconnect the programming connector to remove power from the TSL.")
     finally:
         power.off()
 
@@ -194,40 +134,58 @@ def program_once(power, sbw, firmware_blocks):
     return device_uuid
 
 
-_stdin_poll = select.poll()
-_stdin_poll.register(sys.stdin, select.POLLIN)
-
-
-def _drain_stdin():
-    while _stdin_poll.poll(0):
-        sys.stdin.read(1)
-
-
-def _wait_key():
-    while not _stdin_poll.poll(0):
-        time.sleep_ms(10)
-    return sys.stdin.read(1)
+def _ensure_wifi(ssid, password):
+    """Block until WiFi is connected, retrying every 2 seconds."""
+    while not wifi.is_connected():
+        try:
+            wifi.connect(ssid, password)
+        except Exception as e:
+            print("WiFi: %s, retrying..." % e)
+            time.sleep_ms(1000)
 
 
 def program_loop():
-    print("Logging disabled.")
-    firmware_blocks = load_firmware_blocks()
-    power = TargetPower(SBW_PIN_POWER, POWER_SETTLE_MS)
+    from secrets import WIFI_SSID, WIFI_PASSWORD, SHEETS_URL
+
+    firmware_blocks = load_firmware_blocks(FIRMWARE_FILE_NAME)
+    power = TargetPowerWithDetect(SBW_PIN_POWER, SBW_PIN_CLOCK, POWER_SETTLE_MS)
     sbw = SBW(SBW_PIN_CLOCK, SBW_PIN_DATA)
+    led = machine.Pin("LED", machine.Pin.OUT, value=0)
+
+    _ensure_wifi(WIFI_SSID, WIFI_PASSWORD)
 
     while True:
-        _drain_stdin()
-        print("\rPress [spacebar] to start programming cycle, any other key to exit...")
+        # Check wifi while waiting for target
+        if not wifi.is_connected():
+            print("WiFi disconnected, reconnecting...")
+            _ensure_wifi(WIFI_SSID, WIFI_PASSWORD)
 
-        key = _wait_key()
-        if key != " ":
-            print("Exited by user.")
-            return
+        print("Waiting for target...")
+        power.wait_for_connect()
+        print("Target detected.")
 
+        device_uuid = None
+        status = "fail"
+
+        led.on()
         try:
-            program_once(power, sbw, firmware_blocks)
+            device_uuid = program_once(power, sbw, firmware_blocks)
+            status = "pass"
         except Exception as exc:
-            print("Programming failed: %s\n" % exc)
+            print("Programming failed: %s" % exc)
+        finally:
+            led.off()
+
+        # Log result
+        now = time.gmtime()
+        timestamp = "%04d-%02d-%02d %02d:%02d:%02d" % (now[0], now[1], now[2], now[3], now[4], now[5])
+        row = [device_uuid or "unknown", timestamp, status]
+        print("Logging: %s" % row)
+        add_row(SHEETS_URL, row)
+
+        print("Waiting for target to be removed...")
+        power.wait_for_disconnect()
+        print("Target removed.\n")
 
 
 if __name__ == "__main__":

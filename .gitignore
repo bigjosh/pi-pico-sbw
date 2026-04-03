@@ -4,3 +4,4 @@ __pycache__/
 mpy/build/
 mpy/*.mpy
 mpy/.mpy_ld_cache
+secrets.py

@@ -41,34 +41,81 @@ Press [spacebar] to start programming cycle, any other key to exit...
 Press [spacebar] to start programming cycle, any other key to exit...
 ```
 
-## Auto-program
+### Firmware image
 
+Our programming examples read  `program.txt` from the Pico's filesystem.
+This file is in the standard TI-TXT firmware file format. 
+Copy your firmware image to the Pico as `program.txt` before running.
+
+## Extensions
+
+The Python harness is designed to be extended. These examples are included
+in the repo and can be mixed and matched.
+
+### Auto-detect programming
+
+Fully hands-free. Detects when a target is plugged in.
+
+**Extra files:** `program_auto.py`
+
+`program_auto.py` is an example of how this works. It programs it
+automatically, then waits for removal before accepting the next one.
+The onboard LED lights during programming so you know when it's safe
+to disconnect.
+
+**To activate on boot**, update `main.py`:
 
 ```python
 from program_auto import program_loop
 program_loop()
 ```
 
-
-### Auto mode: `program_auto.py`
-
-
-Fully automatic. Connect a target and it programs immediately — no keypress
-needed. The onboard LED lights during programming. After completion, it waits
-for the target to be removed before accepting the next one. So sweet. 
-
-To use the auto-detect mode instead, copy `program_auto.py` and update `main.py`:
+**Or run from the REPL:**
 
 ```python
 import program_auto
 program_auto.program_loop()
 ```
 
-### Firmware image
+### Google Sheets logging: `addrow.py`
 
-Both modes program the TI-TXT file `program.txt` from the Pico's filesystem.
-Copy your firmware image to the Pico as `program.txt` before running.
-This file format is standard for MSP430 programming. Other formats (like Intel HEX) could be easily supported too. 
+Log each programming event (device UUID, timestamp, pass/fail) to a
+Google Sheet via a Google Apps Script web app. 
+
+Requests are written to
+a local pending file before sending, so nothing is lost if WiFi is
+temporarily unavailable. Pending rows are drained in FIFO order on
+each call.
+
+Uses the built-in Wifi
+on a Pico W or Pico W2.
+
+**Extra files:** `addrow.py`, `wifi.py`, `secrets.py`
+
+**Setup:**
+
+1. Create a Google Apps Script that accepts POST data and appends to a sheet
+2. Create `secrets.py` on the Pico (not committed to git):
+
+```python
+WIFI_SSID = "YourNetwork"
+WIFI_PASSWORD = "YourPassword"
+SHEETS_URL = "https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec"
+```
+
+**Usage from your program:**
+
+```python
+from secrets import WIFI_SSID, WIFI_PASSWORD, SHEETS_URL
+from addrow import add_row
+import wifi
+
+wifi.connect(WIFI_SSID, WIFI_PASSWORD)
+ok = add_row(SHEETS_URL, [uuid, timestamp, "pass"])
+```
+
+Returns `True` if all pending rows were sent. If the connection drops,
+rows accumulate in `log_pending.json` and drain on the next successful call.
 
 ## Hardware
 
@@ -83,6 +130,18 @@ Pin connections (four consecutive physical pins on the Pico 2 W):
 
 Note that the Vcc connection is optional if your target needs external power. The programming code
 examples use the Vcc pin to power cycle the target, but this is not necessary.
+
+## My actual production programming loop
+
+Check out `program_tsl.py` to see how I actually program [Time Since Launch](https://cwandt.com/products/time-since-launch?srsltid=AfmBOor4auA2sgjH6NeBiJE7tu6mlDL5k5cs1GOXVR0JBQ7_Gj1TFE_N) units in the factory.
+
+It demonstrates auto-detect, power measurement, real-time device commissioning, and online logging.
+
+It also shows how I made the setup into a standalone programing station that uses colored LEDs to visually show the programming
+progress and any errors so no screen is needed. 
+
+You will probably no be able to use this directly, but it should give you some ideas of what's possible.
+
 
 # Implementation details
 - MicroPython for orchestration
