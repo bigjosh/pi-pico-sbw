@@ -16,8 +16,9 @@ class SBW:
         self._data = machine.Pin(data_pin, machine.Pin.IN)
 
     def release(self):
+        """Float both SBW pins to prevent parasitic power through protection diodes."""
         self._data.init(machine.Pin.IN)
-        self._clock.init(machine.Pin.OUT, value=0)
+        self._clock.init(machine.Pin.IN)
 
     def read_id(self):
         return sbw_native.read_id(self._clk, self._dio)

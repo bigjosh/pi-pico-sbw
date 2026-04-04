@@ -77,49 +77,79 @@ import program_auto
 program_auto.program_loop()
 ```
 
-### Google Sheets logging: `addrow.py`
+### Google Sheets logging
 
-Log each programming event (device UUID, timestamp, pass/fail) to a
-Google Sheet via a Google Apps Script web app. 
-
-Requests are written to
-a local pending file before sending, so nothing is lost if WiFi is
-temporarily unavailable. Pending rows are drained in FIFO order on
-each call.
-
-Uses the built-in Wifi
-on a Pico W or Pico W2.
+Log each programming event (device UUID, timestamp, firmware hash, MAC
+address, pass/fail) to a Google Sheet via WiFi. Requests are queued to
+local files first, so nothing is lost if WiFi is temporarily down.
+Uses the built-in WiFi on a Pico W or Pico 2 W.
 
 **Extra files:** `addrow.py`, `wifi.py`, `secrets.py`
 
-**Setup:**
+**Quick setup:**
 
-1. Create a Google Apps Script that accepts POST data and appends to a sheet
-2. Create `secrets.py` on the Pico (not committed to git):
+1. Make a copy of the
+   [sample spreadsheet](https://docs.google.com/spreadsheets/d/1FnmMkalKIRswcSzWMTtvnYA1gJqtGSZJb9MsDqMPEFU)
+   (includes the Apps Script)
+2. Deploy the Apps Script as a web app (**Extensions → Apps Script → Deploy**)
+3. Create `secrets.py` on the Pico with your WiFi credentials and the
+   deployment URL
 
-```python
-WIFI_SSID = "YourNetwork"
-WIFI_PASSWORD = "YourPassword"
-SHEETS_URL = "https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec"
-```
-
-**Usage from your program:**
+**Usage:**
 
 ```python
-from secrets import WIFI_SSID, WIFI_PASSWORD, SHEETS_URL
-from addrow import add_row
 import wifi
+from addrow import add_row, flush_once, pending_count
+from secrets import WIFI_SSID, WIFI_PASSWORD, SHEETS_URL
 
 wifi.connect(WIFI_SSID, WIFI_PASSWORD)
-ok = add_row(SHEETS_URL, [uuid, timestamp, "pass"])
+add_row(SHEETS_URL, [uuid, timestamp, fw_hash, mac, "pass"])
+while pending_count():
+    flush_once(SHEETS_URL)
 ```
 
-Returns `True` if all pending rows were sent. If the connection drops,
-rows accumulate in `log_pending.json` and drain on the next successful call.
+See [web_logging.md](web_logging.md) for full setup instructions, the
+Apps Script source, and limitations.
 
-This repo has a sample logging spreadsheet set up that you can use for testing. The app URL is already in `secrets.py` and the
-spreadsheet is [here](SHEETS_URL). You should make a copy of that spreadsheet, deploy the webapp, and change the URL if you want to 
-use this logging for real on your own system.
+### LPM current measurement
+
+Verify the target entered low-power mode after programming by measuring
+its current draw — no external sense hardware needed. Uses the Pico's
+internal pull-up resistor (~66kΩ) on the VCC pin as a current sense
+element and reads the voltage drop via ADC.
+
+Usable range is roughly 0.5–30 µA. Overcurrent protection monitors the
+voltage during the switchover from GPIO drive to pull-up and automatically
+rescues back to full power if the target is drawing too much.
+
+Requires a one-time calibration with a known resistor (~1MΩ) to
+characterize the pull-up resistance.
+
+**Extra files:** `current_measure_calibrate.py`, `calibration.json` (generated)
+
+**Calibrate** (connect 1MΩ from GP28 to GND, run once):
+
+```python
+import current_measure_calibrate
+```
+
+**Measure** (after programming, target still connected):
+
+```python
+from target_power import TargetPower
+r_pullup = TargetPower.load_calibration()
+power.power_via_pullup()
+time.sleep_ms(200)  # let RC settle
+current = power.measure_current_ua(r_pullup)
+if current is None:
+    print("Brownout — target not in LPM")
+else:
+    print("Target current: %.1f µA" % current)
+```
+
+See [current_measure.md](current_measure.md) for full details on the
+approach, calibration math, limitations, and a future capacitor-discharge
+method.
 
 ## Hardware
 

@@ -13,7 +13,7 @@ import time
 import machine
 
 from sbw import SBW
-from target_power import TargetPowerWithDetect
+from target_power import TargetPower, TargetPowerWithDetect
 from utils import load_firmware_blocks, get_device_uuid, firmware_hash
 from addrow import add_row, flush_once, pending_count
 import wifi
@@ -34,8 +34,8 @@ FIRMWARE_FILE_NAME = "tsl-calibre-msp.txt"
 DEVICE_DESCRIPTOR_ADDRESS = 0x1A00
 DEVICE_DESCRIPTOR_LENGTH = 0x12
 TIMESTAMP_ADDRESS = 0x1800
-POST_PROGRAM_RUN_MS = 1000
-REBOOT_OFF_MS = 50
+REBOOT_OFF_MS = 100
+BOOT_SETTLE_MS = 5000
 
 # Below are the steps in the cycle, followed by the pixel number
 
@@ -134,7 +134,8 @@ def program_loop():
     import network
     mac_addr = "".join("%02X" % b for b in network.WLAN(network.STA_IF).config("mac"))
 
-
+    r_pullup = TargetPower.load_calibration()
+    print("Pull-up calibration: %.0f ohm" % r_pullup)
 
     power = TargetPowerWithDetect(SBW_PIN_POWER, SBW_PIN_CLOCK, POWER_SETTLE_MS)
     sbw = SBW(SBW_PIN_CLOCK, SBW_PIN_DATA)
@@ -160,40 +161,58 @@ def program_loop():
         finally:
             led.off()
 
+        # Next let's reboot the target so that the newly programmed firmware starts running
+        print("Rebooting target...")
+        power.off()
+        time.sleep_ms(REBOOT_OFF_MS)
+        power.on()
+
+        # give the target a moment to start running the new firmware and charge decoupling capacitor
+        print("Waiting %dms for target to start up..." % BOOT_SETTLE_MS)
+        time.sleep_ms(BOOT_SETTLE_MS)
+
+        # Our firmware switches to LPM after it loads, so we can test for defects by measuing the current draw
+        
+        print("Switching target power to internal pull-up for current measurement...")
+        power.power_via_pullup()
+        # let the RC circuit settle before taking a measurement
+        time.sleep_ms(200)
+        current_ua = power.measure_current_ua(r_pullup,200)
+        if current_ua is None:
+            print("Brownout — target not in LPM.")
+        else:
+            print("Target current draw: %.0f µA" % current_ua)
+
         # Queue log row (non-blocking)
         now = time.gmtime()
         timestamp = "%04d-%02d-%02d %02d:%02d:%02d" % (now[0], now[1], now[2], now[3], now[4], now[5])
 
         # we need to check device_uuid for none in case we could not read it from the target, we still want to log something. 
-        add_row(SHEETS_URL, [device_uuid or "unknown", timestamp, fw_hash,  mac_addr,  status ])
+        add_row(SHEETS_URL, [device_uuid or "unknown", timestamp, fw_hash,  mac_addr,  status ,current_ua ])
 
-        # drain pending requests 
-        while pending_count():
-
-            # ensure wifi is connected before attempting to flush pending rows
-            while not wifi.is_connected():
-                print("WiFi not connected, reconnecting...")
-                try:
-                    wifi.connect(WIFI_SSID, WIFI_PASSWORD)
-                    print("WiFi connected.")
-                except Exception as e:
-                    print("WiFi error: %s" % e)
-                    continue
-
-            # Sync RTC to NTP (requires WiFi)
-            # This will set the local time for the next programming cycle so that the timestamp
-            # logged to the Google Sheet will be accurate-ish
-            import ntptime
+        # ensure wifi is connected before draining
+        while not wifi.is_connected():
+            print("WiFi not connected, reconnecting...")
             try:
-                ntptime.settime()
-                print("RTC synced to NTP.")
+                wifi.connect(WIFI_SSID, WIFI_PASSWORD)
+                print("WiFi connected.")
             except Exception as e:
-                print("NTP sync failed: %s" % e)
+                print("WiFi error: %s" % e)
+                continue
 
-            print("Transmitting pending row...")
+        # Sync RTC to NTP so next cycle's timestamp is accurate
+        import ntptime
+        try:
+            ntptime.settime()
+        except Exception:
+            pass
+
+        # drain pending requests
+        while pending_count():
             flush_once(SHEETS_URL)
 
         print("Powering off target...")
+        sbw.release()
         power.off()
 
         print("Waiting for target to be removed...")
