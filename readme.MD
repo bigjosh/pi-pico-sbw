@@ -117,6 +117,10 @@ ok = add_row(SHEETS_URL, [uuid, timestamp, "pass"])
 Returns `True` if all pending rows were sent. If the connection drops,
 rows accumulate in `log_pending.json` and drain on the next successful call.
 
+This repo has a sample logging spreadsheet set up that you can use for testing. The app URL is already in `secrets.py` and the
+spreadsheet is [here](SHEETS_URL). You should make a copy of that spreadsheet, deploy the webapp, and change the URL if you want to 
+use this logging for real on your own system.
+
 ## Hardware
 
 Pin connections (four consecutive physical pins on the Pico 2 W):

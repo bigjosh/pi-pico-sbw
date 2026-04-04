@@ -5,6 +5,7 @@ verifies, power-cycles the target to run briefly, then logs the result to
 a Google Sheet. Waits for target removal before the next cycle.
 
 Requires secrets.py with WIFI_SSID, WIFI_PASSWORD, and SHEETS_URL.
+
 Pin connections below.
 """
 import time
@@ -14,7 +15,7 @@ import machine
 from sbw import SBW
 from target_power import TargetPowerWithDetect
 from utils import load_firmware_blocks, get_device_uuid
-from addrow import add_row
+from addrow import add_row, flush_once, pending_count
 import wifi
 import sbw_native
 
@@ -35,6 +36,14 @@ DEVICE_DESCRIPTOR_LENGTH = 0x12
 TIMESTAMP_ADDRESS = 0x1800
 POST_PROGRAM_RUN_MS = 1000
 REBOOT_OFF_MS = 50
+
+# Below are the steps in the cycle, followed by the pixel number
+
+POWER   =1
+TARGET  =2
+PROGRAM =3
+WIFI    =4
+LOG     =5
 
 
 def build_timestamp_bytes(now):
@@ -73,75 +82,47 @@ def program_once(power, sbw, firmware_blocks):
 
     now = time.gmtime()
 
-    tp("Powering on target...")
-    power.on()
-    try:
-        tp("Reading JTAG ID...")
-        ok, jtag_id = sbw.read_id()
-        if not ok or jtag_id != sbw_native.JTAG_ID_EXPECTED:
-            raise RuntimeError("expected JTAG ID 0x%02X, found 0x%02X" % (sbw_native.JTAG_ID_EXPECTED, jtag_id))
+    tp("Reading JTAG ID...")
+    ok, jtag_id = sbw.read_id()
+    if not ok or jtag_id != sbw_native.JTAG_ID_EXPECTED:
+        raise RuntimeError("expected JTAG ID 0x%02X, found 0x%02X" % (sbw_native.JTAG_ID_EXPECTED, jtag_id))
 
-        tp("Reading device descriptor...")
-        ok, dd_bytes = sbw.read_bytes(DEVICE_DESCRIPTOR_ADDRESS, DEVICE_DESCRIPTOR_LENGTH)
-        if not ok or len(dd_bytes) != DEVICE_DESCRIPTOR_LENGTH:
-            raise RuntimeError("failed to read device descriptor")
+    tp("Reading device descriptor...")
+    ok, dd_bytes = sbw.read_bytes(DEVICE_DESCRIPTOR_ADDRESS, DEVICE_DESCRIPTOR_LENGTH)
+    if not ok or len(dd_bytes) != DEVICE_DESCRIPTOR_LENGTH:
+        raise RuntimeError("failed to read device descriptor")
 
-        device_uuid = get_device_uuid(dd_bytes)
-        tp("Device UUID is %s" % device_uuid)
+    device_uuid = get_device_uuid(dd_bytes)
+    tp("Device UUID is %s" % device_uuid)
 
-        # Write timestamp + firmware
-        timestamp_data = build_timestamp_bytes(now)
-        tp("Writing commissioning timestamp...")
-        if not sbw.write_bytes(TIMESTAMP_ADDRESS, timestamp_data):
-            raise RuntimeError("write failed for timestamp at 0x%05X" % TIMESTAMP_ADDRESS)
+    # Write timestamp + firmware
+    timestamp_data = build_timestamp_bytes(now)
+    tp("Writing commissioning timestamp...")
+    if not sbw.write_bytes(TIMESTAMP_ADDRESS, timestamp_data):
+        raise RuntimeError("write failed for timestamp at 0x%05X" % TIMESTAMP_ADDRESS)
 
-        for index, (address, data) in enumerate(firmware_blocks, start=1):
-            tp("Writing firmware block %d/%d addr=0x%05X len=%d..." % (
-                index, len(firmware_blocks), address & 0xFFFFF, len(data)))
-            if not sbw.write_bytes(address, data):
-                raise RuntimeError("write failed at 0x%05X" % (address & 0xFFFFF))
+    for index, (address, data) in enumerate(firmware_blocks, start=1):
+        tp("Writing firmware block %d/%d addr=0x%05X len=%d..." % (
+            index, len(firmware_blocks), address & 0xFFFFF, len(data)))
+        if not sbw.write_bytes(address, data):
+            raise RuntimeError("write failed at 0x%05X" % (address & 0xFFFFF))
 
-        # Verify all
-        tp("Verifying commissioning timestamp...")
-        ok, _ = sbw.verify_bytes(TIMESTAMP_ADDRESS, timestamp_data)
+    # Verify all
+    tp("Verifying commissioning timestamp...")
+    ok, _ = sbw.verify_bytes(TIMESTAMP_ADDRESS, timestamp_data)
+    if not ok:
+        raise RuntimeError("verify failed for timestamp at 0x%05X" % TIMESTAMP_ADDRESS)
+
+    for index, (address, data) in enumerate(firmware_blocks, start=1):
+        tp("Verifying firmware block %d/%d addr=0x%05X len=%d..." % (
+            index, len(firmware_blocks), address & 0xFFFFF, len(data)))
+        ok, _ = sbw.verify_bytes(address, data)
         if not ok:
-            raise RuntimeError("verify failed for timestamp at 0x%05X" % TIMESTAMP_ADDRESS)
+            raise RuntimeError("verify failed at 0x%05X" % (address & 0xFFFFF))
 
-        for index, (address, data) in enumerate(firmware_blocks, start=1):
-            tp("Verifying firmware block %d/%d addr=0x%05X len=%d..." % (
-                index, len(firmware_blocks), address & 0xFFFFF, len(data)))
-            ok, _ = sbw.verify_bytes(address, data)
-            if not ok:
-                raise RuntimeError("verify failed at 0x%05X" % (address & 0xFFFFF))
+    tp("All blocks verified.")
 
-        tp("All blocks verified.")
-    except Exception:
-        power.off()
-        raise
-
-    # Power-cycle target to run briefly
-    tp("Starting target execution...")
-    power.off()
-    time.sleep_ms(REBOOT_OFF_MS)
-    power.on()
-    try:
-        tp("Waiting %g seconds..." % (POST_PROGRAM_RUN_MS / 1000.0))
-        time.sleep_ms(POST_PROGRAM_RUN_MS)
-    finally:
-        power.off()
-
-    tp("Done.")
     return device_uuid
-
-
-def _ensure_wifi(ssid, password):
-    """Block until WiFi is connected, retrying every 2 seconds."""
-    while not wifi.is_connected():
-        try:
-            wifi.connect(ssid, password)
-        except Exception as e:
-            print("WiFi: %s, retrying..." % e)
-            time.sleep_ms(1000)
 
 
 def program_loop():
@@ -152,20 +133,16 @@ def program_loop():
     sbw = SBW(SBW_PIN_CLOCK, SBW_PIN_DATA)
     led = machine.Pin("LED", machine.Pin.OUT, value=0)
 
-    _ensure_wifi(WIFI_SSID, WIFI_PASSWORD)
-
     while True:
-        # Check wifi while waiting for target
-        if not wifi.is_connected():
-            print("WiFi disconnected, reconnecting...")
-            _ensure_wifi(WIFI_SSID, WIFI_PASSWORD)
-
         print("Waiting for target...")
         power.wait_for_connect()
         print("Target detected.")
 
         device_uuid = None
         status = "fail"
+
+        print("Powering on target...")
+        power.on()
 
         led.on()
         try:
@@ -176,17 +153,33 @@ def program_loop():
         finally:
             led.off()
 
-        # Log result
+        # Queue log row (non-blocking)
+        print("Queueing log row...")
         now = time.gmtime()
         timestamp = "%04d-%02d-%02d %02d:%02d:%02d" % (now[0], now[1], now[2], now[3], now[4], now[5])
-        row = [device_uuid or "unknown", timestamp, status]
-        print("Logging: %s" % row)
-        add_row(SHEETS_URL, row)
+        add_row(SHEETS_URL, [device_uuid or "unknown", timestamp, status])
+
+        # drain pending requests 
+        while pending_count():
+
+            # ensure wifi is connected before attempting to flush pending rows
+            while not wifi.is_connected():
+                print("WiFi not connected, reconnecting...")
+                try:
+                    wifi.connect(WIFI_SSID, WIFI_PASSWORD)
+                    print("WiFi connected.")
+                except Exception as e:
+                    print("WiFi error: %s" % e)
+                    continue
+            print("Transmitting pending row...")
+            flush_once(SHEETS_URL)
+
+        print("Powering off target...")
+        power.off()
 
         print("Waiting for target to be removed...")
         power.wait_for_disconnect()
         print("Target removed.\n")
 
 
-if __name__ == "__main__":
-    program_loop()
+program_loop()
