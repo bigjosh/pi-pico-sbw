@@ -16,15 +16,14 @@ from target_power import TargetPowerWithDetect
 from utils import load_firmware_blocks
 import sbw_native
 
-# Pico Pin | GPIO | Target Pin
+# Pico Pin | GPIO | Function
 # ---------|------|----------
+#       29 | GP22 | SBWTDIO
 #       31 | GP26 | SBWTCK
-#       32 | GP27 | SBWTDIO
-#       33 | GND  | GND
-#       34 | GP28 | VCC
+#       32 | GP27 | VCC
 SBW_PIN_CLOCK = 26
-SBW_PIN_DATA = 27
-SBW_PIN_POWER = 28
+SBW_PIN_DATA = 22
+SBW_PIN_POWER = 27
 POWER_SETTLE_MS = 20
 
 FIRMWARE_FILE_NAME = "program.txt"

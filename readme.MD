@@ -151,30 +151,58 @@ See [current_measure.md](current_measure.md) for full details on the
 approach, calibration math, limitations, and a future capacitor-discharge
 method.
 
+### WS2812B pixel strip
+
+Visual status indicator for headless operation. 
+
+**Extra files:** `pixels.py`
+
+**Default Wiring:** GP28 → strip data in, 3V3 → strip VCC, GND → strip GND. 
+Note you can move the data pin to any GPIO, and strip ground to any ground pin, but power must be the 3.3V pin (or the VBUS if connected to use power and you want LEDs to be really bright - but this might be flakey with some strips).
+
+**Usage:**
+
+```python
+from pixels import Pixels, RED, GREEN, BLUE, BLACK, LT_GREEN, rgb
+
+px = Pixels(28)                             # GP28, PIO state machine 0
+px.show([RED, GREEN, BLUE, BLACK, BLACK])   # set 5 pixels
+px.show([BLACK] * 5)                        # all off
+px.show([LT_GREEN] * 5)                     # all dim green
+px.show([BLACK] * 10 )                      # good night
+```
+
+Includes 16 saturated color constants plus `LT_` variants (25% brightness).
+See [pixels.md](pixels.md) for full API and PIO implementation details.
+
 ## Hardware
 
-Pin connections (four consecutive physical pins on the Pico 2 W):
+My SBW and pixel strip connections:
 
-| Pico Pin | GPIO | Target Pin |
-|----------|------|------------|
+| Pico Pin | GPIO | Function |
+|----------|------|----------|
+| 28 | GND | SBW GND |
+| 29 | GP22 | SBWTDIO |
 | 31 | GP26 | SBWTCK |
-| 32 | GP27 | SBWTDIO |
-| 33 | GND | GND |
-| 34 | GP28 | VCC |
+| 32 | GP27 | VCC |
+| 33 | GND | Pixel GND |
+| 34 | GP28 | Pixel data |
+| 36 | 3V3 | Pixel VCC |
 
-Note that the Vcc connection is optional if your target needs external power. The programming code
-examples use the Vcc pin to power cycle the target, but this is not necessary.
+GP26 (SBWTCK) doubles as ADC input for target auto-detect.
+GP27 (VCC) doubles as ADC input for LPM current measurement.
+The pixel strip is optional. VCC is optional if your target has external power.
+
+Note that the VCC connection is optional if your target needs external power. The programming code
+examples use the VCC pin to power cycle the target, but this is not necessary.
 
 ## My actual production programming loop
 
 Check out `program_tsl.py` to see how I actually program [Time Since Launch](https://cwandt.com/products/time-since-launch?srsltid=AfmBOor4auA2sgjH6NeBiJE7tu6mlDL5k5cs1GOXVR0JBQ7_Gj1TFE_N) units in the factory.
 
-It demonstrates auto-detect, power measurement, real-time device commissioning, and online logging.
+It demonstrates auto-detect, power measurement, real-time device commissioning, headless pixel display, and online logging.
 
-It also shows how I made the setup into a standalone programing station that uses colored LEDs to visually show the programming
-progress and any errors so no screen is needed. 
-
-You will probably no be able to use this directly, but it should give you some ideas of what's possible.
+You will probably not be able to use this directly, but it should give you some ideas of what's possible.
 
 
 # Implementation details
@@ -186,7 +214,7 @@ You will probably no be able to use this directly, but it should give you some i
 ## How so much faster than TI Tools?
 
 1. Used the quick versions of read and write block. These are only semi-documented and not used by the TI code. These save having to reload the address for every word transferred.
-2. Run closer to the max 10Mhz clock speed. We get about 50% of the way there using carefully crafted SIO bitbanging. We could get to 100% with PIO but this was fast enough for me.
+2. Run closer to the max 10Mhz clock speed. We get about 50% of the way there using carefully crafted SIO bitbanging. We could get to 100% with PIO but this was fast enough for me so not worth the hassle.
 3. Got rid of all the crufty overhead of the TI tools doing all sorts of stuff over the USB link and doing extra resets of the target etc. We only do what is strictly necessary to reliably program and verify, and we do it the most direct way possible.
 
 ## Repo Layout

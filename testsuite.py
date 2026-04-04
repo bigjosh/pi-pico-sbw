@@ -17,15 +17,14 @@ from sbw_config import (
     bytes_to_words_le,
 )
 
-# Pico Pin | GPIO | Target Pin
+# Pico Pin | GPIO | Function
 # ---------|------|----------
+#       29 | GP22 | SBWTDIO
 #       31 | GP26 | SBWTCK
-#       32 | GP27 | SBWTDIO
-#       33 | GND  | GND
-#       34 | GP28 | VCC
+#       32 | GP27 | VCC
 SBW_PIN_CLOCK = 26
-SBW_PIN_DATA = 27
-SBW_PIN_POWER = 28
+SBW_PIN_DATA = 22
+SBW_PIN_POWER = 27
 POWER_SETTLE_MS = 20
 
 

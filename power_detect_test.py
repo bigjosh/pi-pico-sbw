@@ -1,13 +1,12 @@
 from target_power import TargetPowerWithDetect
 
-# Pico Pin | GPIO | Target Pin
+# Pico Pin | GPIO | Function
 # ---------|------|----------
+#       29 | GP22 | SBWTDIO
 #       31 | GP26 | SBWTCK
-#       32 | GP27 | SBWTDIO
-#       33 | GND  | GND
-#       34 | GP28 | VCC
+#       32 | GP27 | VCC
 DETECT_PIN = 26
-POWER_PIN = 28
+POWER_PIN = 27
 
 power = TargetPowerWithDetect(POWER_PIN, DETECT_PIN)
 

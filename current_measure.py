@@ -7,7 +7,7 @@ import time
 import machine
 from target_power import TargetPower
 
-POWER_PIN = 28
+POWER_PIN = 27
 
 power = TargetPower(POWER_PIN)
 r_pullup = TargetPower.load_calibration()

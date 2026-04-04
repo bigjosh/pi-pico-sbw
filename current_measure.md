@@ -6,7 +6,7 @@ sense hardware — just the Pico's built-in pull-up resistor and ADC.
 
 ## How It Works
 
-The VCC pin (GP28) serves double duty: GPIO output for powering the target
+The VCC pin (GP27) serves double duty: GPIO output for powering the target
 during programming, and ADC input with internal pull-up for current
 measurement afterward.
 
@@ -99,7 +99,7 @@ that the voltage barely changes.
 ### Procedure
 
 1. Disconnect the target
-2. Connect the calibration resistor from GP28 (VCC pin, Pico pin 34) to GND
+2. Connect the calibration resistor from GP27 (VCC pin, Pico pin 32) to GND
 3. From the MicroPython REPL:
 
 ```python

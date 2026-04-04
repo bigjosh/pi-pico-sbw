@@ -1,7 +1,7 @@
 """Calibrate the internal pull-up resistance on the VCC pin.
 
 Connect a known resistor (default 1.1M ohm, 1% tolerance) from the VCC pin
-(GP28, Pico pin 34) to GND. Then run:
+(GP27, Pico pin 32) to GND. Then run:
 
     import current_measure_calibrate
 
@@ -12,7 +12,7 @@ import json
 import machine
 from target_power import _adc_with_pullup, _adc_avg_ms
 
-POWER_PIN = 28
+POWER_PIN = 27
 CAL_RESISTOR_OHMS = 1_100_000
 CAL_FILE = "calibration.json"
 

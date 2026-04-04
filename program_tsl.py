@@ -10,40 +10,57 @@ Pin connections below.
 """
 import time
 
-import machine
-
 from sbw import SBW
-from target_power import TargetPower, TargetPowerWithDetect
-from utils import load_firmware_blocks, get_device_uuid, firmware_hash
-from addrow import add_row, flush_once, pending_count
-import wifi
+from utils import get_device_uuid
 import sbw_native
+from pixels import *
 
-# Pico Pin | GPIO | Target Pin
+# Pico Pin | GPIO | Function
 # ---------|------|----------
-#       31 | GP26 | SBWTCK
-#       32 | GP27 | SBWTDIO
-#       33 | GND  | GND
-#       34 | GP28 | VCC
+#       29 | GP22 | SBWTDIO
+#       31 | GP26 | SBWTCK (must have ADC)
+#       32 | GP27 | VCC
 SBW_PIN_CLOCK = 26
-SBW_PIN_DATA = 27
-SBW_PIN_POWER = 28
+SBW_PIN_DATA = 22
+SBW_PIN_POWER = 27
 POWER_SETTLE_MS = 20
+PIXEL_PIN = 28
 
 FIRMWARE_FILE_NAME = "tsl-calibre-msp.txt"
+
+# from part datasheets
 DEVICE_DESCRIPTOR_ADDRESS = 0x1A00
 DEVICE_DESCRIPTOR_LENGTH = 0x12
+
+# beging of USER FRAM
 TIMESTAMP_ADDRESS = 0x1800
+
+# based on part and circuit and firmware
 REBOOT_OFF_MS = 100
 BOOT_SETTLE_MS = 5000
 
-# Below are the steps in the cycle, followed by the pixel number
+# emperical acceptable current range for a TSL
+LPM_CURRENT_MIN_UA = 1
+LPM_CURRENT_MAX_UA = 3
 
-POWER   =1
-TARGET  =2
-PROGRAM =3
-WIFI    =4
-LOG     =5
+# Pixel indices for headless status strip.
+READY   = 0
+STATE   = 1
+
+# progress
+PROGRAM = 3
+BOOT    = 4
+CURRENT = 5
+WIFI    = 6
+NTP     = 7
+LOG     = 8
+# IMPORTANT: Update StatusPixels count below if you add/remove steps.
+
+# Semantic pixel colors
+C_READY   = LT_GREEN
+C_PENDING = LT_YELLOW
+C_PASS    = LT_GREEN
+C_FAIL    = RED
 
 
 def build_timestamp_bytes(now):
@@ -126,12 +143,17 @@ def program_once(power, sbw, firmware_blocks):
 
 
 def program_loop():
+    import machine
+    import network
     from secrets import WIFI_SSID, WIFI_PASSWORD, SHEETS_URL
+    from target_power import TargetPower, TargetPowerWithDetect
+    from utils import load_firmware_blocks, firmware_hash
+    from addrow import add_row, flush_once, pending_count
+    import wifi
 
     firmware_blocks = load_firmware_blocks(FIRMWARE_FILE_NAME)
 
     fw_hash = firmware_hash(firmware_blocks)
-    import network
     mac_addr = "".join("%02X" % b for b in network.WLAN(network.STA_IF).config("mac"))
 
     r_pullup = TargetPower.load_calibration()
@@ -141,13 +163,23 @@ def program_loop():
     sbw = SBW(SBW_PIN_CLOCK, SBW_PIN_DATA)
     led = machine.Pin("LED", machine.Pin.OUT, value=0)
 
+    sp = StatusPixels(PIXEL_PIN, 9)     # I hate this hardcode, but I can not figure out pythonic way to do it better. 
+                                        # IMPORTANT: Update StatusPixels count if you add/remove steps.
+
     while True:
+        sp.clear()
+
         print("Waiting for target...")
+        sp.set(READY, C_READY)
         power.wait_for_connect()
+
         print("Target detected.")
+        sp.set(READY, BLACK)
+        sp.set(PROGRAM, C_PENDING)
 
         device_uuid = None
         status = "fail"
+        current_ua = None
 
         print("Powering on target...")
         power.on()
@@ -155,42 +187,54 @@ def program_loop():
         led.on()
         try:
             device_uuid = program_once(power, sbw, firmware_blocks)
-            status = "pass"
+            status = "programmed"
+            sp.set(PROGRAM, C_PASS)
         except Exception as exc:
             print("Programming failed: %s" % exc)
+            sp.set(PROGRAM, C_FAIL)
         finally:
             led.off()
 
-        # Next let's reboot the target so that the newly programmed firmware starts running
+        # Reboot target so newly programmed firmware starts running
         print("Rebooting target...")
+        sp.set(BOOT, C_PENDING)
         power.off()
         time.sleep_ms(REBOOT_OFF_MS)
         power.on()
 
-        # give the target a moment to start running the new firmware and charge decoupling capacitor
         print("Waiting %dms for target to start up..." % BOOT_SETTLE_MS)
         time.sleep_ms(BOOT_SETTLE_MS)
+        sp.set(BOOT, C_PASS)
 
-        # Our firmware switches to LPM after it loads, so we can test for defects by measuing the current draw
-        
+        # Measure LPM current to test for defects        
+        sp.set(CURRENT, C_PENDING)
         print("Switching target power to internal pull-up for current measurement...")
         power.power_via_pullup()
-        # let the RC circuit settle before taking a measurement
         time.sleep_ms(200)
-        current_ua = power.measure_current_ua(r_pullup,200)
+        current_ua = power.measure_current_ua(r_pullup, 200)
         if current_ua is None:
+            status = "brownout"
             print("Brownout — target not in LPM.")
+            sp.set(CURRENT, C_FAIL)
         else:
-            print("Target current draw: %.0f µA" % current_ua)
+            if (current_ua < LPM_CURRENT_MIN_UA or current_ua > LPM_CURRENT_MAX_UA):
+                status = "lpm_fail"
+                print("Target current out of LPM spec: %.0f µA" % current_ua)
+                sp.set(CURRENT, C_FAIL)
+                sp.set(STATE, C_FAIL)
+            else:
+                status = "pass"
+                print("Target current draw: %.0f µA" % current_ua)
+                sp.set(CURRENT, C_PASS)
+                sp.set(STATE, C_PASS)
 
-        # Queue log row (non-blocking)
+        # Queue log row
         now = time.gmtime()
         timestamp = "%04d-%02d-%02d %02d:%02d:%02d" % (now[0], now[1], now[2], now[3], now[4], now[5])
+        add_row(SHEETS_URL, [device_uuid or "unknown", timestamp, fw_hash, mac_addr, status, current_ua])
 
-        # we need to check device_uuid for none in case we could not read it from the target, we still want to log something. 
-        add_row(SHEETS_URL, [device_uuid or "unknown", timestamp, fw_hash,  mac_addr,  status ,current_ua ])
-
-        # ensure wifi is connected before draining
+        # WiFi connect + NTP sync
+        sp.set(WIFI, C_PENDING)
         while not wifi.is_connected():
             print("WiFi not connected, reconnecting...")
             try:
@@ -198,18 +242,23 @@ def program_loop():
                 print("WiFi connected.")
             except Exception as e:
                 print("WiFi error: %s" % e)
+                sp.set(WIFI, C_FAIL)
                 continue
+        sp.set(WIFI, C_PASS)
 
-        # Sync RTC to NTP so next cycle's timestamp is accurate
+        sp.set(NTP, C_PENDING)
         import ntptime
         try:
             ntptime.settime()
+            sp.set(NTP, C_PASS)
         except Exception:
-            pass
+            sp.set(NTP, C_FAIL)
 
-        # drain pending requests
+        # Drain pending log rows
+        sp.set(LOG, C_PENDING)
         while pending_count():
             flush_once(SHEETS_URL)
+        sp.set(LOG, C_PASS)
 
         print("Powering off target...")
         sbw.release()
@@ -218,6 +267,5 @@ def program_loop():
         print("Waiting for target to be removed...")
         power.wait_for_disconnect()
         print("Target removed.\n")
-
 
 program_loop()

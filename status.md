@@ -15,10 +15,10 @@ Validated environment:
 - Firmware: official MicroPython `v1.27.0`
 - Target: `MSP430FR4133`
 - Wiring (consecutive physical pins):
+  - Pin 29 / `GP22` -> `/RST/NMI / SBWTDIO`
   - Pin 31 / `GP26` -> `TEST / SBWTCK`
-  - Pin 32 / `GP27` -> `/RST/NMI / SBWTDIO`
-  - Pin 33 / `GND`  -> target `GND`
-  - Pin 34 / `GP28` -> target `VCC`
+  - Pin 32 / `GP27` -> target `VCC`
+  - Pin 34 / `GP28` -> WS2812B pixel data
 
 Important runtime requirement:
 
