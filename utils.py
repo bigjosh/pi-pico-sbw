@@ -1,4 +1,5 @@
 """Shared utilities for MSP430 SBW programming."""
+import hashlib
 
 
 def parse_titxt_blocks(titxt_data):
@@ -65,6 +66,14 @@ def load_firmware_blocks(path):
         % (len(blocks), total_bytes)
     )
     return blocks
+
+
+def firmware_hash(blocks):
+    """Return the MD5 hex digest of firmware block data."""
+    h = hashlib.md5()
+    for _, data in blocks:
+        h.update(data)
+    return "".join("%02x" % b for b in h.digest())
 
 
 def get_device_uuid(dd_bytes):

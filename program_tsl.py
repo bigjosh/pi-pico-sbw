@@ -14,7 +14,7 @@ import machine
 
 from sbw import SBW
 from target_power import TargetPowerWithDetect
-from utils import load_firmware_blocks, get_device_uuid
+from utils import load_firmware_blocks, get_device_uuid, firmware_hash
 from addrow import add_row, flush_once, pending_count
 import wifi
 import sbw_native
@@ -129,6 +129,11 @@ def program_loop():
     from secrets import WIFI_SSID, WIFI_PASSWORD, SHEETS_URL
 
     firmware_blocks = load_firmware_blocks(FIRMWARE_FILE_NAME)
+
+    fw_hash = firmware_hash(firmware_blocks)
+    import network
+    mac_addr = "".join("%02X" % b for b in network.WLAN(network.STA_IF).config("mac"))
+
     power = TargetPowerWithDetect(SBW_PIN_POWER, SBW_PIN_CLOCK, POWER_SETTLE_MS)
     sbw = SBW(SBW_PIN_CLOCK, SBW_PIN_DATA)
     led = machine.Pin("LED", machine.Pin.OUT, value=0)
@@ -154,10 +159,11 @@ def program_loop():
             led.off()
 
         # Queue log row (non-blocking)
-        print("Queueing log row...")
         now = time.gmtime()
         timestamp = "%04d-%02d-%02d %02d:%02d:%02d" % (now[0], now[1], now[2], now[3], now[4], now[5])
-        add_row(SHEETS_URL, [device_uuid or "unknown", timestamp, status])
+
+        # we need to check device_uuid for none in case we could not read it from the target, we still want to log something. 
+        add_row(SHEETS_URL, [device_uuid or "unknown", timestamp, fw_hash,  mac_addr,  status ])
 
         # drain pending requests 
         while pending_count():
