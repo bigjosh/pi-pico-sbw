@@ -134,6 +134,8 @@ def program_loop():
     import network
     mac_addr = "".join("%02X" % b for b in network.WLAN(network.STA_IF).config("mac"))
 
+
+
     power = TargetPowerWithDetect(SBW_PIN_POWER, SBW_PIN_CLOCK, POWER_SETTLE_MS)
     sbw = SBW(SBW_PIN_CLOCK, SBW_PIN_DATA)
     led = machine.Pin("LED", machine.Pin.OUT, value=0)
@@ -177,6 +179,17 @@ def program_loop():
                 except Exception as e:
                     print("WiFi error: %s" % e)
                     continue
+
+            # Sync RTC to NTP (requires WiFi)
+            # This will set the local time for the next programming cycle so that the timestamp
+            # logged to the Google Sheet will be accurate-ish
+            import ntptime
+            try:
+                ntptime.settime()
+                print("RTC synced to NTP.")
+            except Exception as e:
+                print("NTP sync failed: %s" % e)
+
             print("Transmitting pending row...")
             flush_once(SHEETS_URL)
 
