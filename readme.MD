@@ -43,7 +43,7 @@ Press [spacebar] to start programming cycle, any other key to exit...
 
 ### Firmware image
 
-Our programming examples read  `program.txt` from the Pico's filesystem.
+The example `program.py` reads  `program.txt` from the Pico's filesystem.
 This file is in the standard TI-TXT firmware file format. 
 Copy your firmware image to the Pico as `program.txt` before running.
 
@@ -54,7 +54,7 @@ in the repo and can be mixed and matched.
 
 ### Auto-detect programming
 
-Fully hands-free. Detects when a target is plugged in.
+Fully hands-free. Detects when a target is plugged in and immediately starts programming cycle. Super fast for a production line. 
 
 **Extra files:** `program_auto.py`
 
@@ -84,6 +84,8 @@ address, pass/fail) to a Google Sheet via WiFi. Requests are queued to
 local files first, so nothing is lost if WiFi is temporarily down.
 Uses the built-in WiFi on a Pico W or Pico 2 W.
 
+This also uses SNTP to set the lock clock so that log entries have a local timestamp. 
+
 **Extra files:** `log.py`, `wifi.py`, `secrets.py`
 
 **Quick setup:**
@@ -108,17 +110,34 @@ while pending_count():
     flush_once(SHEETS_URL)
 ```
 
+**Example `secrets.pi`:**
+```
+WIFI_SSID = "mynetworkiscool"
+WIFI_PASSWORD = "shhhhhhhhh"
+WIFI_COUNTRY = "US"
+
+# This is the URL of the Google Apps Script web app that receives log rows from the factory programmer
+# The sheet is here so you can see if your logging is working: https://docs.google.com/spreadsheets/d/1iP67tK8HS1eW9TOhgdxXeeBYk5jmoF0EW1KPMRkxliM/edit?usp=sharing
+# This is just an example sheet I made for testing purposes, you should make your own if you want to do this kind of logging.
+SHEETS_URL = "https://script.google.com/macros/s/AKfycbwbaCnzd9HzcxFH7fZNXO6tcGLlXIYpXSt6CnHwemSeGESorucdWF4D7nVO9pjRfy0n/exec"
+```
+
 See [web_logging.md](web_logging.md) for full setup instructions, the
 Apps Script source, and limitations.
 
 ### LPM current measurement
 
 Verify the target entered low-power mode after programming by measuring
-its current draw. Uses an external 100kΩ burden resistor between a
+its current draw. Very handy for proving out a PCB doesn't have any soft (or
+hard) shorts. 
+
+Uses an external 100kΩ burden resistor between a
 drive pin (GP21) and the VCC pin (GP27). The drive pin powers the target
 through the resistor while the VCC pin reads the voltage drop via ADC.
 
 Usable range is roughly 0.5–25 µA. No per-board calibration needed.
+
+Note that your firmware must put the MSP430 into LPM after boot for this to be useful.
 
 **Extra hardware:** 100kΩ resistor (1% tolerance) between GP21 and GP27
 
@@ -137,7 +156,10 @@ approach, circuit diagram, and why the external resistor is needed.
 
 ### WS2812B pixel strip
 
-Visual status indicator for headless operation. 
+Visual status indicator for headless operation.
+
+Very handy for headless operation. When combined with auto-detect, you can make
+a very efficient production programming station.
 
 **Extra files:** `pixels.py`
 
@@ -159,25 +181,30 @@ px.show([BLACK] * 10 )                      # good night
 Includes 16 saturated color constants plus `LT_` variants (25% brightness).
 See [pixels.md](pixels.md) for full API and PIO implementation details.
 
+### Online firmware update
+
+Coming soon.
+
+You will be able to push the button on the Pico to tell it to download the latest version of the firmware image from a github release. 
+
+I just really want to understand how that button interacts with a running python 
+program before I put this into the code, because based on a strict reading of the docs it seems like pressing the button might sometimes rarely crash the running code???
+
+
 ## Hardware
 
 My SBW and pixel strip connections:
 
-| Pico Pin | GPIO | Function |
-|----------|------|----------|
-| 27 | GP21 | Burden resistor drive (100kΩ to GP27) |
-| 28 | GND | SBW GND |
-| 29 | GP22 | SBWTDIO |
-| 31 | GP26 | SBWTCK |
-| 32 | GP27 | VCC |
-| 33 | GND | Pixel GND |
-| 34 | GP28 | Pixel data |
-| 36 | 3V3 | Pixel VCC |
-
-GP26 (SBWTCK) doubles as ADC input for target auto-detect.
-GP27 (VCC) doubles as ADC input for LPM current measurement.
-GP21 drives the burden resistor for current measurement.
-The pixel strip is optional. VCC is optional if your target has external power.
+| Pico Pin | GPIO | Function | Needed for |
+|----------|------|----------|------------|
+| 28 | GND | SBW GND | SBW (always) |
+| 29 | GP22 | SBWTDIO | SBW (always) |
+| 31 | GP26 | SBWTCK | SBW (always) |
+| 32 | GP27 | VCC | Power target, current measurement |
+| 27 | GP21 | Burden resistor | Current measurement |
+| 33 | GND | Pixel GND | Pixel strip |
+| 34 | GP28 | Pixel data | Pixel strip |
+| 36 | 3V3 | Pixel VCC | Pixel strip |
 
 Note that the VCC connection is optional if your target needs external power. The programming code
 examples use the VCC pin to power cycle the target, but this is not necessary.
@@ -211,18 +238,42 @@ You will probably not be able to use this directly, but it should give you some 
 
 ## Repo Layout
 
-- [program_auto.py](program_auto.py) — auto-detecting programmer (see above)
-- [program.py](program.py) — manual keypress-triggered programmer (see above)
+**Programming examples:**
+- [program.py](program.py) — simple manual keypress-triggered programmer
+- [program_auto.py](program_auto.py) — auto-detecting programmer
+- [program_tsl.py](program_tsl.py) — full production programmer with WiFi logging, current measurement, and pixel status
+
+**Core SBW:**
 - [sbw.py](sbw.py) — Python wrapper around the native SBW module
-- [target_power.py](target_power.py) — target power control and connection detection
-- [sbw_native.mpy](mpy/sbw_native.mpy) — compiled native module
-- [mpy/sbw_native.c](mpy/sbw_native.c) — native module source (SBW transport, JTAG sequencing, memory access)
 - [mpy/SBW_NATIVE_API.md](mpy/SBW_NATIVE_API.md) — native module API reference
-- [testsuite.py](testsuite.py) — regression tests and benchmark
+- [mpy/README.md](mpy/README.md) — native module build notes
+
+### Options
+
+- [target_power.py](target_power.py) — target power control, auto-detect, and current measurement
+- [utils.py](utils.py) — TI-TXT parsing, firmware hashing, device UUID extraction
+
+**Logging**
+- [wifi.py](wifi.py) — WiFi connection management with reconnect
+- [log.py](log.py) — offline-resilient Google Sheets logging via file queue
+- [safe_time.py](safe_time.py) — thread-safe time/NTP access
+- [web_logging.md](web_logging.md) — Google Sheets logging setup guide
+
+**Current measurement**
+- [current_measure.md](current_measure.md) — external burden resistor approach and circuit
+- [target_power.py](target_power.py) — target power control, auto-detect, and current measurement
+
+**Pixels:**
+- [pixels.py](pixels.py) — WS2812B pixel driver via PIO
+- [pixels.md](pixels.md) — pixel API and PIO implementation details
+- [pixel_test.py](pixel_test.py) — interactive pixel strip test
+
+**Testing and tools:**
+- [testsuite.py](testsuite.py) — SBW regression tests and benchmark
 - [sbw_config.py](sbw_config.py) — regression test constants
 - [power_detect_test.py](power_detect_test.py) — interactive target detect/disconnect test loop
-- [mpy/README.md](mpy/README.md) — native module build notes
-- [tools/build-mpy-native.ps1](tools/build-mpy-native.ps1) — Windows build helper
+- [tools/build-mpy-native.ps1](tools/build-mpy-native.ps1) — Windows native module build helper
+
 
 ## Build And Deploy
 

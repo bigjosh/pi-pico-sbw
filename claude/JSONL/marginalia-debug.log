@@ -1,0 +1,25 @@
+[2026-04-05T17:58:51.265491] === pre-commit hook started ===
+[2026-04-05T17:58:51.266495] cwd: D:\Github\pi-pico-sbw
+[2026-04-05T17:58:51.267286] GIT_INDEX_FILE: .git/index
+[2026-04-05T17:58:51.276806] breadcrumb found: /c/Users/passp/.claude/projects/D--Github-pi-pico-sbw/79e9bbfc-c4a6-4c21-af8c-15b0d9fe66fe.jsonl
+[2026-04-05T17:58:51.277407] breadcrumb file does NOT exist on disk
+[2026-04-05T17:58:51.278618] using fallback path detection
+[2026-04-05T17:58:51.466721] repo_root: D:/Github/pi-pico-sbw
+[2026-04-05T17:58:51.467481] candidates: {'D--Github-pi-pico-sbw'}
+[2026-04-05T17:58:51.467989] claude_dir: C:\Users\passp\.claude\projects\D--Github-pi-pico-sbw
+[2026-04-05T17:58:51.469175] fallback picked: C:\Users\passp\.claude\projects\D--Github-pi-pico-sbw\455b1a09-bb99-4c7d-8873-95084c4de3ba.jsonl (size: 11420993)
+[2026-04-05T17:58:51.470273] copying C:\Users\passp\.claude\projects\D--Github-pi-pico-sbw\455b1a09-bb99-4c7d-8873-95084c4de3ba.jsonl (11420993 bytes)
+[2026-04-05T17:58:51.495963] copied to claude/JSONL/session.jsonl (11420993 bytes)
+[2026-04-05T17:58:51.920726] git add exit code: 0, stderr: warning: LF will be replaced by CRLF in claude/JSONL/session.jsonl.
+The file will have its original line endings in your working directory
+[2026-04-05T17:58:51.921277] === pre-commit hook finished ===
+[2026-04-08T00:42:03.586936] === pre-commit hook started ===
+[2026-04-08T00:42:03.587593] cwd: D:\Github\pi-pico-sbw
+[2026-04-08T00:42:03.588306] GIT_INDEX_FILE: .git/index
+[2026-04-08T00:42:03.597639] breadcrumb found: C:\Users\passp\.claude\projects\D--Github-pi-pico-sbw\0785c625-d91c-4a88-a695-1d8477e0a65d.jsonl
+[2026-04-08T00:42:03.598587] breadcrumb file exists, size: 2361121
+[2026-04-08T00:42:03.599281] copying C:\Users\passp\.claude\projects\D--Github-pi-pico-sbw\0785c625-d91c-4a88-a695-1d8477e0a65d.jsonl (2361121 bytes)
+[2026-04-08T00:42:03.608242] copied to claude/JSONL/session.jsonl (2361121 bytes)
+[2026-04-08T00:42:03.854480] git add exit code: 0, stderr: warning: LF will be replaced by CRLF in claude/JSONL/session.jsonl.
+The file will have its original line endings in your working directory
+[2026-04-08T00:42:03.855061] === pre-commit hook finished ===

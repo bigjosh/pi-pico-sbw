@@ -1,0 +1,93 @@
+#!/usr/bin/env python
+"""Claude-Marginalia: snapshot the current session JSONL into the repo before each commit."""
+import datetime, glob, os, re, shutil, subprocess, sys
+
+DEBUG_LOG = os.path.join("claude", "JSONL", "marginalia-debug.log")
+
+def log(msg):
+    os.makedirs(os.path.join("claude", "JSONL"), exist_ok=True)
+    with open(DEBUG_LOG, "a") as f:
+        f.write(f"[{datetime.datetime.now().isoformat()}] {msg}\n")
+
+log("=== pre-commit hook started ===")
+log(f"cwd: {os.getcwd()}")
+log(f"GIT_INDEX_FILE: {os.environ.get('GIT_INDEX_FILE', '(not set)')}")
+
+session_jsonl = ""
+
+# First, try the deterministic path written by the SessionStart hook
+if os.path.exists(".claude-session-path"):
+    with open(".claude-session-path") as f:
+        candidate = f.read().strip()
+    log(f"breadcrumb found: {candidate}")
+    if candidate and os.path.exists(candidate):
+        session_jsonl = candidate
+        log(f"breadcrumb file exists, size: {os.path.getsize(candidate)}")
+    else:
+        log("breadcrumb file does NOT exist on disk")
+else:
+    log("no .claude-session-path breadcrumb")
+
+# Fallback: find the most recently modified .jsonl in the Claude project dir
+if not session_jsonl:
+    log("using fallback path detection")
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, check=True
+        )
+        repo_root = result.stdout.strip()
+        log(f"repo_root: {repo_root}")
+    except Exception as e:
+        log(f"git rev-parse failed: {e}")
+        sys.exit(0)
+
+    claude_base = os.path.join(os.path.expanduser("~"), ".claude", "projects")
+    if not os.path.isdir(claude_base):
+        log(f"claude_base does not exist: {claude_base}")
+        sys.exit(0)
+
+    # Build candidate directory names from different path formats
+    candidates = set()
+    candidates.add(re.sub(r"[:\\/]", "-", repo_root))
+    m = re.match(r"^/([a-zA-Z])/(.*)", repo_root)
+    if m:
+        candidates.add(m.group(1).upper() + "--" + m.group(2).replace("/", "-"))
+    log(f"candidates: {candidates}")
+
+    claude_dir = None
+    for name in candidates:
+        path = os.path.join(claude_base, name)
+        if os.path.isdir(path):
+            claude_dir = path
+            break
+
+    if not claude_dir:
+        log("no matching claude project dir found")
+        sys.exit(0)
+
+    log(f"claude_dir: {claude_dir}")
+    jsonl_files = glob.glob(os.path.join(claude_dir, "*.jsonl"))
+    if not jsonl_files:
+        log("no .jsonl files found")
+        sys.exit(0)
+
+    session_jsonl = max(jsonl_files, key=os.path.getmtime)
+    log(f"fallback picked: {session_jsonl} (size: {os.path.getsize(session_jsonl)})")
+
+if not session_jsonl:
+    log("no session_jsonl resolved — exiting")
+    sys.exit(0)
+
+src_size = os.path.getsize(session_jsonl)
+log(f"copying {session_jsonl} ({src_size} bytes)")
+
+os.makedirs(os.path.join("claude", "JSONL"), exist_ok=True)
+shutil.copy2(session_jsonl, os.path.join("claude", "JSONL", "session.jsonl"))
+
+dst_size = os.path.getsize(os.path.join("claude", "JSONL", "session.jsonl"))
+log(f"copied to claude/JSONL/session.jsonl ({dst_size} bytes)")
+
+result = subprocess.run(["git", "add", os.path.join("claude", "JSONL", "session.jsonl")], capture_output=True, text=True)
+log(f"git add exit code: {result.returncode}, stderr: {result.stderr.strip()}")
+log("=== pre-commit hook finished ===")
