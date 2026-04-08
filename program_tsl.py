@@ -37,6 +37,7 @@ DEVICE_DESCRIPTOR_LENGTH = 0x12
 
 # beging of USER FRAM
 TIMESTAMP_ADDRESS = 0x1800
+INIT_FLAG_ADDRESS = 0x180E  # initalized_flag in persistent_data_t
 
 # based on part and circuit and firmware
 REBOOT_OFF_MS  = 100
@@ -68,14 +69,15 @@ STATE   = 1
 PROGRAM     = 3
 BOOT        = 4
 CURRENT     = 5
+INIT        = 6
 
 # Startup status steps
-WIFI        = 7
-NTP         = 8
-LOG         = 9
-UPDATE      = 10
+WIFI        = 8
+NTP         = 9
+LOG         = 10
+UPDATE      = 11
 # ===============
-PIXEL_COUNT = 11
+PIXEL_COUNT = 12
 
 # Semantic pixel colors
 C_READY   = GREEN
@@ -293,7 +295,6 @@ def program_loop():
         finally:
             led.off()
 
-        # We are done with SBW for this cycle
         # Float the SBW clock and data lines so they don't sink current from the target
         print("Floating SBW pins for current measurement...")
         sbw.release()
@@ -330,9 +331,32 @@ def program_loop():
                 sp.set(CURRENT, C_FAIL)
                 sp.set(STATE, C_FAIL)
             else:
-                status = "pass"
                 sp.set(CURRENT, C_PASS)
-                sp.set(STATE, C_PASS)
+
+                # Set initialized flag in USER FRAM via SBW
+                # Target is already powered (GPIO restored by measure_current_ua)
+                sp.set(INIT, C_PENDING)
+                print("Setting initialized flag at 0x%04X..." % INIT_FLAG_ADDRESS)
+                try:
+                    ok, jtag_id = sbw.read_id()
+                    if not ok:
+                        raise RuntimeError("Failed to re-enter JTAG")
+                    ok, _ = sbw.write_mem16(INIT_FLAG_ADDRESS, 0x0001)
+                    if not ok:
+                        raise RuntimeError("Failed to write init flag")
+                    ok, readback = sbw.read_mem16(INIT_FLAG_ADDRESS)
+                    if not ok or readback != 0x0001:
+                        raise RuntimeError("Verify failed (readback=0x%04X)" % readback)
+                    print("Initialized flag set.")
+                    sp.set(INIT, C_PASS)
+                    sp.set(STATE, C_PASS)
+                    status = "pass"
+                except Exception as exc:
+                    sbw.release()
+                    print("Init flag failed: %s" % exc)
+                    sp.set(INIT, C_FAIL)
+                    sp.set(STATE, C_FAIL)
+                    status = "init_fail"
 
         # Power off target
         print("Powering off target and releasing SBW...")
@@ -354,6 +378,7 @@ def program_loop():
         sp.set(PROGRAM, BLACK)
         sp.set(BOOT, BLACK)
         sp.set(CURRENT, BLACK)
+        sp.set(INIT, BLACK)
         sp.set(LOG, BLACK)
         sp.set(STATE, BLACK)
 
