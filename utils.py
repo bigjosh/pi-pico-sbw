@@ -32,39 +32,15 @@ def parse_titxt_blocks(titxt_data):
     return blocks
 
 
-def merge_contiguous_blocks(blocks):
-    """Merge adjacent blocks with consecutive addresses into single blocks."""
-    merged = []
-
-    for address, data in blocks:
-        if not merged:
-            merged.append((address, bytes(data)))
-            continue
-
-        prev_address, prev_data = merged[-1]
-        prev_end = prev_address + len(prev_data)
-
-        if address == prev_end:
-            merged[-1] = (prev_address, prev_data + data)
-        else:
-            merged.append((address, bytes(data)))
-
-    return merged
-
 
 def load_firmware_blocks(path):
     """Load a TI-TXT file and return a list of (address, bytes) blocks."""
-    print("Loading %s into memory..." % path)
     with open(path, "rb") as handle:
         titxt_data = handle.read()
 
     blocks = parse_titxt_blocks(titxt_data)
     total_bytes = sum(len(data) for _, data in blocks)
 
-    print(
-        "Firmware is %d block(s), %d bytes.\n"
-        % (len(blocks), total_bytes)
-    )
     return blocks
 
 

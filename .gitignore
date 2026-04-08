@@ -5,3 +5,4 @@ mpy/build/
 mpy/*.mpy
 mpy/.mpy_ld_cache
 secrets.py
+.claude-session-path

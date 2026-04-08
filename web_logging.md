@@ -19,7 +19,7 @@ disk and drain automatically when connectivity returns. Nothing is lost.
 The `pending/` directory on the Pico's filesystem is the queue. Each
 request is a single JSON file:
 
-1. `add_row()` writes to `pending/.tmp_000042` (invisible to sender)
+1. `log_row()` writes to `pending/.tmp_000042` (invisible to sender)
 2. Atomically renames to `pending/req_000042` (visible to sender)
 3. `flush_once()` reads the oldest `req_*` file, POSTs it, deletes on success
 
@@ -34,7 +34,7 @@ mid-operation.
 
 Google Apps Script returns a 302 redirect on every POST. MicroPython's
 `urequests` library silently converts POST to GET on redirect, which
-breaks the flow. Our `addrow.py` uses raw sockets to handle this
+breaks the flow. Our `log.py` uses raw sockets to handle this
 correctly: POST to the script URL, receive the 302, then GET the
 redirect URL to retrieve the JSON response.
 
@@ -100,28 +100,28 @@ In addition to the base programmer files, you need:
 
 | File | Purpose |
 |------|---------|
-| `addrow.py` | Write-ahead queue and HTTP POST with redirect handling |
+| `log.py` | Write-ahead queue and HTTP POST with redirect handling |
 | `wifi.py` | WiFi connection management |
 | `secrets.py` | Your WiFi and Apps Script credentials |
 
 ## Usage
 
 ```python
-from addrow import add_row, flush_once, pending_count
+from log import log_row, flush_once, pending_count
 import wifi
 from secrets import WIFI_SSID, WIFI_PASSWORD, SHEETS_URL
 
 wifi.connect(WIFI_SSID, WIFI_PASSWORD)
 
 # Queue a row (instant, writes to disk)
-add_row(SHEETS_URL, ["device_uuid", "2026-04-03 12:00:00", "fw_hash", "mac", "pass"])
+log_row(SHEETS_URL, ["device_uuid", "2026-04-03 12:00:00", "fw_hash", "mac", "pass"])
 
 # Send all pending rows
 while pending_count():
     flush_once(SHEETS_URL)
 ```
 
-`add_row()` never blocks on the network — it just writes a file. Call
+`log_row()` never blocks on the network — it just writes a file. Call
 `flush_once()` when you're ready to send. Each call sends one row and
 returns `True` on success.
 
@@ -201,7 +201,7 @@ function doPost(e) {
 
 | File | Purpose |
 |------|---------|
-| `addrow.py` | Queue management + HTTP POST with Google redirect handling |
+| `log.py` | Queue management + HTTP POST with Google redirect handling |
 | `wifi.py` | WiFi connect/reconnect helpers |
 | `secrets.py` | Credentials (gitignored, create your own) |
 | `pending/` | On-device queue directory (created automatically) |

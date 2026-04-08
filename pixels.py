@@ -18,6 +18,7 @@ import time
 import rp2
 import machine
 
+import _thread
 
 @rp2.asm_pio(sideset_init=rp2.PIO.OUT_LOW, out_shiftdir=rp2.PIO.SHIFT_LEFT,
              autopull=True, pull_thresh=24)
@@ -59,7 +60,7 @@ LT_WHITE  = rgb(64, 64, 64)
 LT_RED    = rgb(64, 0, 0)
 LT_GREEN  = rgb(0, 64, 0)
 LT_BLUE   = rgb(0, 0, 64)
-LT_YELLOW = rgb(64, 64, 0)
+LT_YELLOW = rgb(40, 16, 0)
 
 
 class Pixels:
@@ -73,15 +74,22 @@ class Pixels:
             freq=8_000_000, sideset_base=machine.Pin(pin))
         self._sm.active(1)
 
+        # make sure we can call from both threads without garbling display
+        self.lock = _thread.allocate_lock()
+
     def show(self, words):
         """Write pixel data to the strip.
 
         words: list/tuple of 32-bit GRB values (one per pixel), as
         returned by rgb() or the color constants. Top 8 bits are ignored.
         """
-        for w in words:
-            self._sm.put(w, 8)
-        time.sleep_ms(1)  # wait for PIO to drain + 50µs reset gap to latch
+        self.lock.acquire()
+        try:
+            for w in words:
+                self._sm.put(w, 8)
+            time.sleep_ms(1)  # wait for PIO to drain + 50µs reset gap to latch
+        finally:
+            self.lock.release()
 
 
 class StatusPixels:

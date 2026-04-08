@@ -6,24 +6,14 @@ import machine
 TARGET_DETECT_MV = 3000
 TARGET_DETECT_HOLD_MS = 20
 
-_PADS_BANK0_BASE = 0x40038000  # RP2350 pad control register block
-
-# Current measurement defaults
-CURRENT_WINDOW_MS = 100        # ADC averaging window (should cover load noise cycles)
-BROWNOUT_MV = 1700             # below this the target has browned out
+_PADS_BANK0_BASE = 0x40038000
 
 
 def _adc_with_pullup(pin_num):
-    """Configure a pin as ADC input with pull-up enabled.
-
-    The Pico SDK's adc_gpio_init() (called internally by machine.ADC())
-    calls gpio_disable_pulls(), which strips the pull-up we need.
-    We re-enable it by setting the PUE bit (bit 3) in the RP2350
-    PADS_BANK0 register for this GPIO.
-    """
+    """Configure a pin as ADC input with pull-up enabled (for target detect)."""
     adc = machine.ADC(pin_num)
     pad_reg = _PADS_BANK0_BASE + 4 + pin_num * 4
-    machine.mem32[pad_reg] |= 1 << 3  # PUE — re-enable pull-up
+    machine.mem32[pad_reg] |= 1 << 3  # PUE
     return adc
 
 
@@ -41,51 +31,44 @@ class TargetPower:
     def off(self):
         self._power.init(machine.Pin.OUT, value=0)
 
-    @staticmethod
-    def load_calibration(path="calibration.json"):
-        """Load pull-up resistance from a calibration JSON file."""
-        import json
-        try:
-            with open(path) as f:
-                return json.load(f)["r_pullup_ohms"]
-        except OSError:
-            raise RuntimeError("calibration.json not found — see current_measure.md Calibration section")
+    def measure_current_ua(self, res_pin, r_ext, vcc=3.32, settle_ms=500, sample_ms=500):
+        """Measure target current via external burden resistor.
 
-    def power_via_pullup(self):
-        """Switch VCC from GPIO drive to internal pull-up.
+        Drives res_pin high through the external resistor while reading
+        the power pin voltage via ADC. Returns (min, avg, max) current in µA.
 
-        Call this, wait for the RC circuit to settle, then call
-        measure_current_ua(). Caller controls the settle time.
+        res_pin: GPIO number connected to the resistor's drive side
+        r_ext: external resistor value in ohms
+        vcc: measured supply voltage
+        settle_ms: time to wait after switching to resistor power
+        sample_ms: sampling window in ms (1 sample per ms)
         """
-        _adc_with_pullup(self._power_pin)
-
-    def measure_current_ua(self, r_pullup, window_ms=CURRENT_WINDOW_MS, brownout_mv=BROWNOUT_MV):
-        """Measure target current via the pull-up voltage drop.
-
-        r_pullup is the calibrated pull-up resistance in ohms (from
-        load_calibration()).
-
-        Averages ADC readings over window_ms milliseconds. The window should
-        be long enough to cover any periodic load variation (e.g. LCD toggle).
-
-        Caller must have already called power_via_pullup() and waited for the
-        RC circuit to settle before calling this.
-
-        If the voltage is below brownout_mv, the target has browned out and
-        the function restores GPIO drive and returns None.
-
-        On success, returns the measured current in µA.
-        """
+        # Drive resistor pin high, switch power pin to ADC
+        machine.Pin(res_pin, machine.Pin.OUT, value=1)
         adc = machine.ADC(self._power_pin)
-        avg = _adc_avg_ms(adc, window_ms)
-        v_meas = avg * 3.3 / 65535
+        time.sleep_ms(settle_ms)
 
-        if v_meas * 1000 < brownout_mv:
-            self._power.init(machine.Pin.OUT, value=1)  # rescue
-            return None
+        total = 0
+        min_raw = 65535
+        max_raw = 0
+        for _ in range(sample_ms):
+            raw = adc.read_u16()
+            total += raw
+            if raw < min_raw:
+                min_raw = raw
+            if raw > max_raw:
+                max_raw = raw
+            time.sleep_ms(1)
 
-        i_amps = (3.3 - v_meas) / r_pullup
-        return i_amps * 1_000_000  # µA
+        # Restore: power pin drives high, float resistor pin
+        machine.Pin(self._power_pin, machine.Pin.OUT, value=1)
+        machine.Pin(res_pin, machine.Pin.IN)
+
+        def raw_to_ua(r):
+            return (vcc - r * vcc / 65535) / r_ext * 1_000_000
+
+        avg = total // sample_ms
+        return (raw_to_ua(min_raw), raw_to_ua(avg), raw_to_ua(max_raw))
 
 
 class TargetPowerWithDetect(TargetPower):
@@ -116,16 +99,6 @@ class TargetPowerWithDetect(TargetPower):
         adc = _adc_with_pullup(self._detect_pin)
         return adc.read_u16() * 3300 // 65535
 
-
-def _adc_avg_ms(adc, window_ms):
-    """Sample ADC continuously for window_ms and return the average as u16."""
-    total = 0
-    count = 0
-    deadline = time.ticks_add(time.ticks_ms(), window_ms)
-    while time.ticks_diff(deadline, time.ticks_ms()) > 0:
-        total += adc.read_u16()
-        count += 1
-    return total // count if count > 0 else 0
 
 
 def _wait_adc(adc, threshold_u16, hold_ms, below):

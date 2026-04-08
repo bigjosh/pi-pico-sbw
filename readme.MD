@@ -14,8 +14,8 @@ Python harness easily extensible. Examples showing target-autodetect & logging t
    `mpy/sbw_native.mpy`, `sbw.py`, `target_power.py`, `program.py`, `main.py`
 4. Rename your TI-TXT firmware file to `program.txt` and copy to the Pico
 5. Connect a target and open a serial terminal to the Pico (or just power it on)
-6. `main.py` runs automatically on boot, starting the manual programming loop
-7. Press **spacebar** to program, any other key to exit to the REPL
+6. `import program.py`.
+7.  Press **spacebar** to program, any other key to exit to the REPL
 
 You should see something like this...
 
@@ -84,7 +84,7 @@ address, pass/fail) to a Google Sheet via WiFi. Requests are queued to
 local files first, so nothing is lost if WiFi is temporarily down.
 Uses the built-in WiFi on a Pico W or Pico 2 W.
 
-**Extra files:** `addrow.py`, `wifi.py`, `secrets.py`
+**Extra files:** `log.py`, `wifi.py`, `secrets.py`
 
 **Quick setup:**
 
@@ -99,11 +99,11 @@ Uses the built-in WiFi on a Pico W or Pico 2 W.
 
 ```python
 import wifi
-from addrow import add_row, flush_once, pending_count
+from log import log_row, flush_once, pending_count
 from secrets import WIFI_SSID, WIFI_PASSWORD, SHEETS_URL
 
 wifi.connect(WIFI_SSID, WIFI_PASSWORD)
-add_row(SHEETS_URL, [uuid, timestamp, fw_hash, mac, "pass"])
+log_row(SHEETS_URL, [uuid, timestamp, fw_hash, mac, "pass"])
 while pending_count():
     flush_once(SHEETS_URL)
 ```
@@ -114,42 +114,26 @@ Apps Script source, and limitations.
 ### LPM current measurement
 
 Verify the target entered low-power mode after programming by measuring
-its current draw — no external sense hardware needed. Uses the Pico's
-internal pull-up resistor (~66kΩ) on the VCC pin as a current sense
-element and reads the voltage drop via ADC.
+its current draw. Uses an external 100kΩ burden resistor between a
+drive pin (GP21) and the VCC pin (GP27). The drive pin powers the target
+through the resistor while the VCC pin reads the voltage drop via ADC.
 
-Usable range is roughly 0.5–30 µA. Overcurrent protection monitors the
-voltage during the switchover from GPIO drive to pull-up and automatically
-rescues back to full power if the target is drawing too much.
+Usable range is roughly 0.5–25 µA. No per-board calibration needed.
 
-Requires a one-time calibration with a known resistor (~1MΩ) to
-characterize the pull-up resistance.
-
-**Extra files:** `current_measure_calibrate.py`, `calibration.json` (generated)
-
-**Calibrate** (connect 1MΩ from GP28 to GND, run once):
-
-```python
-import current_measure_calibrate
-```
+**Extra hardware:** 100kΩ resistor (1% tolerance) between GP21 and GP27
 
 **Measure** (after programming, target still connected):
 
 ```python
 from target_power import TargetPower
-r_pullup = TargetPower.load_calibration()
-power.power_via_pullup()
-time.sleep_ms(200)  # let RC settle
-current = power.measure_current_ua(r_pullup)
-if current is None:
-    print("Brownout — target not in LPM")
-else:
-    print("Target current: %.1f µA" % current)
+
+power = TargetPower(27)
+i_min, i_avg, i_max = power.measure_current_ua(res_pin=21, r_ext=100_000, vcc=3.32)
+print("Current: min=%.2f avg=%.2f max=%.2f µA" % (i_min, i_avg, i_max))
 ```
 
 See [current_measure.md](current_measure.md) for full details on the
-approach, calibration math, limitations, and a future capacitor-discharge
-method.
+approach, circuit diagram, and why the external resistor is needed.
 
 ### WS2812B pixel strip
 
@@ -181,6 +165,7 @@ My SBW and pixel strip connections:
 
 | Pico Pin | GPIO | Function |
 |----------|------|----------|
+| 27 | GP21 | Burden resistor drive (100kΩ to GP27) |
 | 28 | GND | SBW GND |
 | 29 | GP22 | SBWTDIO |
 | 31 | GP26 | SBWTCK |
@@ -191,6 +176,7 @@ My SBW and pixel strip connections:
 
 GP26 (SBWTCK) doubles as ADC input for target auto-detect.
 GP27 (VCC) doubles as ADC input for LPM current measurement.
+GP21 drives the burden resistor for current measurement.
 The pixel strip is optional. VCC is optional if your target has external power.
 
 Note that the VCC connection is optional if your target needs external power. The programming code
@@ -200,10 +186,16 @@ examples use the VCC pin to power cycle the target, but this is not necessary.
 
 Check out `program_tsl.py` to see how I actually program [Time Since Launch](https://cwandt.com/products/time-since-launch?srsltid=AfmBOor4auA2sgjH6NeBiJE7tu6mlDL5k5cs1GOXVR0JBQ7_Gj1TFE_N) units in the factory.
 
-It demonstrates auto-detect, power measurement, real-time device commissioning, headless pixel display, and online logging.
+It demonstrates:
+
+- auto-detect of target
+- target power measurement
+- reading MSP430 device serial number
+- pixel display for headless operation
+- online logging to Google spreadsheet
+- downloads latest firmware image from GitHub release on startup
 
 You will probably not be able to use this directly, but it should give you some ideas of what's possible.
-
 
 # Implementation details
 - MicroPython for orchestration
