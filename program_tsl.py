@@ -59,6 +59,7 @@ CURRENT_SETTLE_MS = 500
 CURRENT_SAMPLE_MS = 100
 
 # WiFi timeouts
+SNTP_RETRY_INTERVAL_S   = 60        # Retry on failure every 60 seconds
 SNTP_REFRESH_INTERVAL_S = 60*60*24  # refresh SNTP time once a day
 
 # Pixel indices for headless status strip.
@@ -66,18 +67,15 @@ READY   = 0
 STATE   = 1
 
 # progress
-PROGRAM     = 3
-BOOT        = 4
-CURRENT     = 5
-INIT        = 6
+PROGRAM     = 2
+CURRENT     = 3
+INIT        = 4
 
 # Startup status steps
-WIFI        = 8
-NTP         = 9
-LOG         = 10
-UPDATE      = 11
-# ===============
-PIXEL_COUNT = 12
+WIFI        = 5
+NTP         = 6
+LOG         = 7
+# Pixel indices must be < Pixels.FIFO_DEPTH (8) to fit in the PIO FIFO.
 
 # Semantic pixel colors
 C_READY   = GREEN
@@ -110,6 +108,20 @@ def build_timestamp_bytes(now):
             year % 100,
         ]
     )
+
+
+def set_init_flag_to(sbw, value):
+    """Write a 16-bit value to the init flag address and verify via readback."""
+    sbw.connect()
+    ok, jtag_id = sbw.read_id()
+    if not ok:
+        raise RuntimeError("Failed to enter JTAG")
+    ok, _ = sbw.write_mem16(INIT_FLAG_ADDRESS, value)
+    if not ok:
+        raise RuntimeError("Failed to write init flag")
+    ok, readback = sbw.read_mem16(INIT_FLAG_ADDRESS)
+    if not ok or readback != value:
+        raise RuntimeError("Verify failed (wrote=0x%04X readback=0x%04X)" % (value, readback))
 
 
 def program_once(power, sbw, firmware_blocks):
@@ -229,9 +241,9 @@ def bg_thread(sp, w):
 def program_loop():
 
     print("Testing status pixels...")
-    sp = StatusPixels(PIXEL_PIN, PIXEL_COUNT)
+    sp = StatusPixels(PIXEL_PIN)
     for color in [RED, GREEN, BLUE,BLACK]:
-        for i in range(PIXEL_COUNT):
+        for i in range(Pixels.FIFO_DEPTH):
             sp.set(i, color)
             time.sleep_ms(100)
         time.sleep_ms(500)
@@ -282,9 +294,19 @@ def program_loop():
 
         print("Powering on target...")
         power.on()
+        sbw.connect()
 
         led.on()
         try:
+
+            # we have to clear the init flag before starting so in case it was
+            # already set and then we fail here it will not be set anymore. 
+            print("Clearing init flag...")
+            set_init_flag_to(sbw, 0x0000)
+            print("Initialized flag cleared.")
+            status = "init_cleared"
+
+            print("Starting programming sequence...")
             device_uuid = program_once(power, sbw, firmware_blocks)
             status = "programmed"
             sp.set(PROGRAM, C_PASS)
@@ -304,14 +326,12 @@ def program_loop():
         if status == "programmed":
             # Reboot target so newly programmed firmware starts running
             print("Rebooting target...")
-            sp.set(BOOT, C_PENDING)
             power.off()  # This forces Vcc to gnd so we dont need to wait for the decoupling cap
             time.sleep_ms(REBOOT_OFF_MS)
             power.on()
             # Wait for the RV3032 to stabilize after power-up before attempting to communicate with it
             print("Waiting %dms for target to start up..." % BOOT_SETTLE_MS)
             time.sleep_ms(BOOT_SETTLE_MS)
-            sp.set(BOOT, C_PASS)
 
             # By the time we get to here, the TSL should be at the "TEST ONLY" screen where power usage is representative.
             # Measure LPM current to test for defects.
@@ -338,15 +358,7 @@ def program_loop():
                 sp.set(INIT, C_PENDING)
                 print("Setting initialized flag at 0x%04X..." % INIT_FLAG_ADDRESS)
                 try:
-                    ok, jtag_id = sbw.read_id()
-                    if not ok:
-                        raise RuntimeError("Failed to re-enter JTAG")
-                    ok, _ = sbw.write_mem16(INIT_FLAG_ADDRESS, 0x0001)
-                    if not ok:
-                        raise RuntimeError("Failed to write init flag")
-                    ok, readback = sbw.read_mem16(INIT_FLAG_ADDRESS)
-                    if not ok or readback != 0x0001:
-                        raise RuntimeError("Verify failed (readback=0x%04X)" % readback)
+                    set_init_flag_to(sbw, 0x0001)
                     print("Initialized flag set.")
                     sp.set(INIT, C_PASS)
                     sp.set(STATE, C_PASS)
@@ -356,7 +368,7 @@ def program_loop():
                     print("Init flag failed: %s" % exc)
                     sp.set(INIT, C_FAIL)
                     sp.set(STATE, C_FAIL)
-                    status = "init_fail"
+                    status = "init_set_fail"
 
         # Power off target
         print("Powering off target and releasing SBW...")
@@ -375,12 +387,13 @@ def program_loop():
         print("Target removed.\n")
 
         #clear progress from previous run
+        print("Clearing LED indicators...")
         sp.set(PROGRAM, BLACK)
-        sp.set(BOOT, BLACK)
+
         sp.set(CURRENT, BLACK)
         sp.set(INIT, BLACK)
-        sp.set(LOG, BLACK)
         sp.set(STATE, BLACK)
+
 
 for i in range(10):
     print(f"Starting in {10 - i} seconds...")

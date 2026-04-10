@@ -37,6 +37,7 @@ def program_once(power, sbw, firmware_blocks):
 
     tp("Powering on target...")
     power.on()
+    sbw.connect()
     try:
         tp("Reading JTAG ID...")
         ok, jtag_id = sbw.read_id()

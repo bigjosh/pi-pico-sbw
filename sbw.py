@@ -12,8 +12,14 @@ class SBW:
             raise RuntimeError("clk_sys %d Hz exceeds sbw_native limit %d Hz" % (freq, sbw_native.SYS_CLK_HZ))
         self._clk = 1 << clock_pin
         self._dio = 1 << data_pin
-        self._clock = machine.Pin(clock_pin, machine.Pin.OUT, value=0)
-        self._data = machine.Pin(data_pin, machine.Pin.IN)
+        self._clock = machine.Pin(clock_pin)
+        self._data = machine.Pin(data_pin)
+        self.connect()
+
+    def connect(self):
+        """Set SBW pins to active state — call before read_id() if previously released."""
+        self._clock.init(machine.Pin.OUT, value=0)
+        self._data.init(machine.Pin.IN)
 
     def release(self):
         """Float both SBW pins to prevent parasitic power through protection diodes."""

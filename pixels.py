@@ -3,6 +3,10 @@
 Drives a WS2812B LED strip directly via a PIO state machine. No
 dependency on MicroPython's built-in neopixel module.
 
+THe sm is nortmally disabled, and we fill the fifo with it disabled to make
+sure we do not get interrupted in the middle of a string which would reset
+the stream. 
+
 Usage:
     from pixels import *
     px = Pixels(28)                          # GP28, state machine 0
@@ -20,8 +24,10 @@ import machine
 
 import _thread
 
+
+
 @rp2.asm_pio(sideset_init=rp2.PIO.OUT_LOW, out_shiftdir=rp2.PIO.SHIFT_LEFT,
-             autopull=True, pull_thresh=24)
+             autopull=True, pull_thresh=24, fifo_join=rp2.PIO.JOIN_TX)
 def _ws2812():
     wrap_target()
     label("bitloop")
@@ -64,6 +70,8 @@ LT_YELLOW = rgb(40, 16, 0)
 
 
 class Pixels:
+    FIFO_DEPTH = 8  # TX + RX joined = 8 entries
+
     def __init__(self, pin, sm_id=0):
         """Initialize PIO state machine for WS2812B on the given GPIO pin.
 
@@ -72,24 +80,37 @@ class Pixels:
         """
         self._sm = rp2.StateMachine(sm_id, _ws2812,
             freq=8_000_000, sideset_base=machine.Pin(pin))
-        self._sm.active(1)
 
         # make sure we can call from both threads without garbling display
         self.lock = _thread.allocate_lock()
 
     def show(self, words):
-        """Write pixel data to the strip.
+        """Write pixel data to the WS2812B LED strip.
 
-        words: list/tuple of 32-bit GRB values (one per pixel), as
-        returned by rgb() or the color constants. Top 8 bits are ignored.
+        Transmits GRB color values to the PIO state machine for the addressable LED strip.
+
+        words: list/tuple of 32-bit GRB values (one per pixel), as returned by
+               rgb() or the color constants. Top 8 bits are ignored.
+
+        The second argument (8) to _sm.put() specifies the number of bits to shift out.
+        The 1ms sleep allows PIO to finish transmitting and provides the 50µs reset gap
+        required by WS2812B protocol to latch the new colors.
+
+        Thread-safe via lock acquisition.
         """
         self.lock.acquire()
+        # print("%d core%d pixel locked" % (time.ticks_ms(), machine.mem32[0xD0000000]))
         try:
             for w in words:
                 self._sm.put(w, 8)
-            time.sleep_ms(1)  # wait for PIO to drain + 50µs reset gap to latch
+            self._sm.active(1)
+            while self._sm.tx_fifo() > 0:
+                time.sleep_ms(1)                # breath
+            time.sleep_ms(1)                       # let new pixels latch
+            self._sm.active(0)
         finally:
             self.lock.release()
+            # print("%d core%d pixel released" % (time.ticks_ms(), machine.mem32[0xD0000000]))
 
 
 class StatusPixels:
@@ -98,16 +119,27 @@ class StatusPixels:
     Each call to set() updates one pixel and refreshes the whole strip.
     """
 
-    def __init__(self, pin, n, sm_id=0):
+    def __init__(self, pin, sm_id=0):
         self._px = Pixels(pin, sm_id)
-        self._buf = [BLACK] * n
+        self._buf = [BLACK] * Pixels.FIFO_DEPTH
 
     def set(self, index, color):
         """Set one pixel and refresh the strip."""
         self._buf[index] = color
         self._px.show(self._buf)
 
-    def clear(self):
-        """Turn all pixels off."""
-        self._buf = [BLACK] * len(self._buf)
-        self._px.show(self._buf)
+
+
+
+# FG: set RED done
+# BG: set BLUE
+# Filled fifo
+# SM active
+# fifo empty
+# BG: set BLUE done
+# FG: set GREEN
+# Filled fifo
+# SM active
+# fifo empty
+# FG: set GREEN done
+# FG: set REDBG: set YELLOW
