@@ -233,6 +233,8 @@ My SBW and pixel strip connections:
 | 33 | GND | Pixel GND | Pixel strip |
 | 34 | GP28 | Pixel data | Pixel strip |
 | 36 | 3V3 | Pixel VCC | Pixel strip |
+| 22 | GP17 | Speaker + | Audible feedback |
+| 23 | GND  | Speaker − | Audible feedback |
 
 Note that the VCC connection is optional if your target needs external power. The programming code
 examples use the VCC pin to power cycle the target, but this is not necessary.
@@ -247,8 +249,8 @@ It demonstrates:
 - target power measurement
 - reading MSP430 device serial number
 - pixel display for headless operation
+- audio feedback for pass/fail on each cycle
 - online logging to Google spreadsheet
-- downloads latest firmware image from GitHub release on startup
 
 You will probably not be able to use this directly, but it should give you some ideas of what's possible.
 
