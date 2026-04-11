@@ -28,6 +28,7 @@ SBW_PIN_POWER = 27
 SBW_PIN_RES   = 21         # 100K ohm resistor to SBW_PIN_POWER
 POWER_SETTLE_MS = 20
 PIXEL_PIN = 28
+SPEAKER_PIN = 17
 
 FIRMWARE_FILE_NAME = "tsl-calibre-msp.txt"
 
@@ -238,6 +239,8 @@ def bg_thread(sp, w):
 
         time.sleep(1)
 
+import sound        
+
 def program_loop():
 
     print("Testing status pixels...")
@@ -267,6 +270,8 @@ def program_loop():
         "Firmware is %d block(s), %d bytes.\n"
         % (len(firmware_blocks), sum(len(data) for _, data in firmware_blocks))
     )
+
+    sound.init(SPEAKER_PIN)
 
     # get log ready for both threads
     log.init()
@@ -382,11 +387,17 @@ def program_loop():
 
         sp.set(LOG,C_PENDING)
 
+        if (status == "pass"):
+            sound.success()
+        else:
+            sound.fail_start()
+
         print("Waiting for target to be removed...")
         power.wait_for_disconnect()
         print("Target removed.\n")
+        sound.off()
 
-        #clear progress from previous run
+        # Clear progress from previous run
         print("Clearing LED indicators...")
         sp.set(PROGRAM, BLACK)
 

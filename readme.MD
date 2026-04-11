@@ -181,6 +181,33 @@ px.show([BLACK] * 10 )                      # good night
 Includes 16 saturated color constants plus `LT_` variants (25% brightness).
 See [pixels.md](pixels.md) for full API and PIO implementation details.
 
+### Audible feedback
+
+Drive a small piezo speaker via PWM for audible pass/fail feedback —
+useful in noisy production environments where you can't always watch
+the pixel strip.
+
+**Extra files:** `sound.py`
+
+**Wiring:** speaker between any PWM-capable GPIO and GND.
+
+**Usage:**
+
+```python
+import sound
+
+sound.init(17)        # PWM on GP17
+sound.success()       # double beep at 2300 Hz
+sound.fail_start()    # continuous 100 Hz fail tone
+sound.off()           # silence
+```
+
+`success()` plays a quick double beep (2300 Hz, 50ms on / 100ms off / 50ms on)
+and returns when done. `fail_start()` starts a continuous low tone that you
+end with `off()`.
+
+I make it so that the fail sound is continuous until the operator removes the unit from the fixture to try to help prevent fails from accidentally getting into the good pile. Having the cute little success beeps helps condition the operator so a fail is more noticeable because the expect the beeps. 
+
 ### Online firmware update
 
 Coming soon.
@@ -267,6 +294,9 @@ You will probably not be able to use this directly, but it should give you some 
 - [pixels.py](pixels.py) — WS2812B pixel driver via PIO
 - [pixels.md](pixels.md) — pixel API and PIO implementation details
 - [pixel_test.py](pixel_test.py) — interactive pixel strip test
+
+**Sound:**
+- [sound.py](sound.py) — PWM speaker driver for pass/fail feedback
 
 **Testing and tools:**
 - [testsuite.py](testsuite.py) — SBW regression tests and benchmark
