@@ -214,9 +214,10 @@ Coming soon.
 
 You will be able to push the button on the Pico to tell it to download the latest version of the firmware image from a github release. 
 
-I just really want to understand how that button interacts with a running python 
-program before I put this into the code, because based on a strict reading of the docs it seems like pressing the button might sometimes rarely crash the running code???
+I think that you can not let the user press the button while the program is running normally since it (seems?) will disconnect the flash memory. So we pick
+a good place where the program visibly dwells and move the function it is sitting in into RAM. The user has to know to only push the button when the program is in that dwell state. We then give the user Feedback that we saw the button pressed by lighting the onboard LED and then they know they can release the button, and then only after the button is released can we exit out of that state/function. 
 
+For my `program_tsl` a good place to do that is during the "ready" state when we are waiting for a new autodetect event. 
 
 ## Hardware
 
