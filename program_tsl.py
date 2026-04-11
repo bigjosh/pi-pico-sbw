@@ -79,7 +79,7 @@ LOG         = 7
 # Pixel indices must be < Pixels.FIFO_DEPTH (8) to fit in the PIO FIFO.
 
 # Semantic pixel colors
-C_READY   = GREEN
+C_READY   = BLUE            # only used for the READY pixel, should be distinct from others
 C_PENDING = LT_YELLOW
 C_PASS    = LT_GREEN
 C_FAIL    = RED
@@ -219,9 +219,10 @@ def bg_thread(sp, w):
             try:
                 safe_time.settime(ntptime)
                 sp.set(NTP, C_PASS)
+                next_sntp_refresh = time.time() + SNTP_REFRESH_INTERVAL_S
             except Exception:
                 sp.set(NTP, C_FAIL)
-            next_sntp_refresh = time.time() + SNTP_REFRESH_INTERVAL_S
+                next_sntp_refresh = time.time() + SNTP_RETRY_INTERVAL_S
 
         # Step 3: Flush pending logs (replaces TCP probe as connectivity proof)
         if pending_count() > 0:
@@ -329,6 +330,8 @@ def program_loop():
 
         # no need to check current if programming failed
         if status == "programmed":
+            sp.set(CURRENT, C_PENDING)
+
             # Reboot target so newly programmed firmware starts running
             print("Rebooting target...")
             power.off()  # This forces Vcc to gnd so we dont need to wait for the decoupling cap
@@ -342,7 +345,6 @@ def program_loop():
             # Measure LPM current to test for defects.
             # This sequence matches simple-current-test/main.py exactly.
 
-            sp.set(CURRENT, C_PENDING)
 
             print("Measuring current via external burden resistor...")
             i_min, current_ua, i_max = power.measure_current_ua(
